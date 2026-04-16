@@ -4,7 +4,7 @@ import React, { useState } from "react";
 
 export default function Dashboard() {
   const [isBotActive, setIsBotActive] = useState(false);
-  const [template, setTemplate] = useState("Hi there! We would absolutely love to help you out with this 💙 Our team specializes in exactly what you need and we pride ourselves on being super reliable and thorough. Feel free to send us a direct message here or check out our website to get a quick quote! ✨\n#FiestaFresh #GoldCoastCleaning #ReliableCleaners #HouseCleaning #BondClean");
+  const [template, setTemplate] = useState("Hi there! We are fully insured and police checked, and we would absolutely love to help you out 💙 You can view our prices and book directly in 60 seconds right here: https://www.fiestafreshcleaning.com/book ✨ Or send a direct message to https://www.facebook.com/share/1KZ42C9jSc/?mibextid=wwXIfr 💙\n#FiestaFresh #GoldCoastCleaning #ReliableCleaners #HouseCleaning #BondClean");
 
   // Mock stats
   const stats = [
