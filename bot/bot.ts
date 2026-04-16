@@ -26,10 +26,10 @@ async function runBot() {
 
     console.log("✅ Bot is ACTIVE. Launching stealth browser...");
 
-    // 2. Launch Browser (Headless = false for safety during stealth)
+    // 2. Launch Browser (Headless MUST BE TRUE on a Cloud Server!)
     const browser = await chromium.launch({
-        headless: false,
-        args: ['--disable-blink-features=AutomationControlled']
+        headless: true,
+        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const context = await browser.newContext({
