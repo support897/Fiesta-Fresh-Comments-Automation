@@ -41,13 +41,37 @@ async function runBot() {
 
     const page = await context.newPage();
 
+    const fbEmail = process.env.FB_EMAIL;
+    const fbPassword = process.env.FB_PASSWORD;
+
     try {
         console.log("➡️ Navigating to Facebook...");
         await page.goto('https://www.facebook.com/', { waitUntil: 'networkidle' });
 
-        // WAIT - We need Ilse to log in on her first run if she isn't!
-        console.log("⚠️ PLEASE LOG IN IF YOU ARE NOT ALREADY. Waiting 30 seconds...");
-        await page.waitForTimeout(30000); 
+        // Check for login fields
+        if (await page.locator('#email').count() > 0) {
+            console.log("🔒 Login screen detected. Attempting to log in...");
+            if (!fbEmail || !fbPassword) {
+                console.error("❌ FB_EMAIL or FB_PASSWORD environment variables are missing! Cannot log in.");
+                await browser.close();
+                return;
+            }
+            
+            // Human-like typing pauses
+            await page.type('#email', fbEmail, { delay: Math.floor(Math.random() * 100) + 50 });
+            await page.waitForTimeout(500);
+            await page.type('#pass', fbPassword, { delay: Math.floor(Math.random() * 100) + 50 });
+            await page.waitForTimeout(1000);
+            
+            await page.click('[name="login"]');
+            await page.waitForNavigation({ waitUntil: 'networkidle' });
+            console.log("✅ Logged in successfully!");
+            
+            // Wait an extra moment to let the home feed fully load
+            await page.waitForTimeout(5000);
+        } else {
+            console.log("✅ Already logged in (or active session found).");
+        }
 
         // 3. Fetch keywords and groups from DB
         const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
