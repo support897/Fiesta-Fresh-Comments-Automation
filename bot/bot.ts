@@ -4,6 +4,10 @@ import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -87,7 +91,19 @@ async function runBot() {
         const templateText = templates?.content || "Hi there! We would absolutely love to help you out with this 💙";
 
         // 4. Poll each group
+        const currentDay = new Date().toLocaleString('en-US', { weekday: 'long', timeZone: 'Australia/Brisbane' });
+        
         for (const group of groups) {
+            // Apply scheduling logic
+            if (group.url.includes('1CbgwuTsYk') && currentDay !== 'Monday') {
+                console.log(`⏭️ Skipping ${group.url} (Only runs on Monday)`);
+                continue;
+            }
+            if (group.url.includes('1JiqcFo29z') && currentDay !== 'Thursday') {
+                console.log(`⏭️ Skipping ${group.url} (Only runs on Thursday)`);
+                continue;
+            }
+
             console.log(`\n🔍 Checking group: ${group.url}`);
             await page.goto(group.url, { waitUntil: 'networkidle' });
 
