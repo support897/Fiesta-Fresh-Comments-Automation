@@ -29,12 +29,27 @@ async function runBot() {
     }
 
     console.log("✅ Bot is ACTIVE. Launching stealth browser...");
+    
+    const proxyServer = process.env.PROXY_SERVER;
+    const proxyUser = process.env.PROXY_USERNAME;
+    const proxyPass = process.env.PROXY_PASSWORD;
 
-    // 2. Launch Browser (Headless MUST BE TRUE on a Cloud Server!)
-    const browser = await chromium.launch({
+    const launchOptions: any = {
         headless: true,
         args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox']
-    });
+    };
+
+    if (proxyServer) {
+        console.log(`🌐 Using Proxy: ${proxyServer}`);
+        launchOptions.proxy = {
+            server: proxyServer,
+            username: proxyUser,
+            password: proxyPass
+        };
+    }
+
+    // 2. Launch Browser (Headless MUST BE TRUE on a Cloud Server!)
+    const browser = await chromium.launch(launchOptions);
 
     const context = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
