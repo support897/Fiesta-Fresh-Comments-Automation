@@ -41,7 +41,7 @@ async function captureProof(page: any, fileName: string) {
             .upload(filePath, screenshot, { contentType: 'image/png' });
 
         if (error) {
-            console.error("📸 Upload failed (Make sure 'bot-screenshots' bucket is public):", error.message);
+            console.error("📸 Upload failed:", error.message);
             return null;
         }
 
@@ -67,10 +67,10 @@ async function runBot() {
         return;
     }
 
-    // --- FUZZY START (1-3 minutes random delay) ---
+    // --- FUZZY START ---
     const delayMin = Math.floor(Math.random() * 2) + 1;
     console.log(`⏳ Stealth: Initial "Fuzzy Delay" for ${delayMin} minutes...`);
-    await new Promise(r => setTimeout(r, delayMin * 60 * 1000));
+    // await new Promise(r => setTimeout(r, delayMin * 60 * 1000)); // Uncomment for actual cloud run
 
     const proxyServer = process.env.PROXY_SERVER;
     const launchOptions: any = {
@@ -140,11 +140,7 @@ async function runBot() {
 
         const templateText = templates?.content || "Hi there! We would love to help! 💙";
 
-        if (!groups) {
-            console.log("No active groups found in database.");
-            await browser.close();
-            return;
-        }
+        if (!groups) return;
 
         for (const group of groups) {
             console.log(`\n🔍 Scanning: ${group.url}`);
@@ -163,21 +159,58 @@ async function runBot() {
             await page.mouse.wheel(0, 800);
             await page.waitForTimeout(3000);
 
-            // LOGIC FOR COMMENTING WOULD GO HERE
-            // For now, we take a placeholder screenshot as "Proof of Scan"
-            if (Math.random() > 0.8) { // Simulate finding a match occasionally for the demo
-               const url = await captureProof(page, 'group_scan');
-               await supabase.from('replies_log').insert({
-                   group_url: group.url,
-                   post_id: 'sample_' + Date.now(),
-                   comment_id: 'sample_' + Date.now(),
-                   screenshot_url: url
-               });
+            // 1. Wait for posts to load
+            await page.waitForSelector('[role="article"]', { timeout: 10000 }).catch(() => null);
+            
+            const posts = page.locator('[role="article"]');
+            const postCount = await posts.count();
+            console.log(`📡 Found ${postCount} posts in the visible area.`);
+
+            for (let i = 0; i < Math.min(postCount, 5); i++) {
+                const post = posts.nth(i);
+                const postText = await post.innerText();
+                const postID = (await post.getAttribute('id')) || `idx_${i}_${Date.now()}`;
+
+                // Check for keywords
+                const match = keywords?.find(k => postText.toLowerCase().includes(k.keyword.toLowerCase()));
+                
+                if (match) {
+                    console.log(`🎯 MATCH FOUND: "${match.keyword}" in post ${postID}`);
+
+                    const { data: existing } = await supabase.from('replies_log').select('*').eq('post_id', postID).single();
+                    if (existing) {
+                        console.log("⏭️ Already replied. Skipping.");
+                        continue;
+                    }
+
+                    console.log("✍️ Preparing reply...");
+                    const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                    
+                    if (await commentBox.isVisible()) {
+                        await commentBox.click();
+                        await page.waitForTimeout(1000);
+                        await humanType(page, '[role="textbox"]:focus', templateText);
+                        await page.keyboard.press('Enter');
+                        console.log("✅ Reply posted!");
+                        await page.waitForTimeout(3000);
+
+                        const proofUrl = await captureProof(page, `reply_success_${postID}`);
+                        await supabase.from('replies_log').insert({
+                            group_url: group.url,
+                            post_id: postID,
+                            template_id: templates?.id,
+                            keyword_id: match.id,
+                            screenshot_url: proofUrl,
+                            status: 'success'
+                        });
+                        break; 
+                    }
+                }
             }
         }
 
     } catch (e) {
-        console.error("💥 Critical Failure:", e);
+        console.error("💥 Failure:", e);
         await captureProof(page, 'error');
     } finally {
         await page.waitForTimeout(5000);
