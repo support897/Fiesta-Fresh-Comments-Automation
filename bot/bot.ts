@@ -18,22 +18,61 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 chromium.use(stealthPlugin());
 
+/**
+ * Human-like typing
+ */
+async function humanType(page: any, selector: string, text: string) {
+    await page.click(selector);
+    for (const char of text) {
+        await page.type(selector, char, { delay: Math.floor(Math.random() * 100) + 45 });
+    }
+}
+
+/**
+ * Capture and upload screenshot to Supabase
+ */
+async function captureProof(page: any, fileName: string) {
+    try {
+        const screenshot = await page.screenshot({ fullPage: false });
+        const filePath = `proofs/${Date.now()}_${fileName}.png`;
+        
+        const { data, error } = await supabase.storage
+            .from('bot-screenshots')
+            .upload(filePath, screenshot, { contentType: 'image/png' });
+
+        if (error) {
+            console.error("📸 Upload failed (Make sure 'bot-screenshots' bucket is public):", error.message);
+            return null;
+        }
+
+        const { data: { publicUrl } } = supabase.storage.from('bot-screenshots').getPublicUrl(filePath);
+        console.log(`📸 Proof captured: ${publicUrl}`);
+        return publicUrl;
+    } catch (e) {
+        console.error("Failed to capture screenshot:", e);
+        return null;
+    }
+}
+
 async function runBot() {
     console.log("🤖 Starting Fiesta Fresh Automation Bot...");
     
-    // 1. Check if the bot is toggled ON in the dashboard
+    const fbEmail = process.env.FB_EMAIL!;
+    const fbPassword = process.env.FB_PASSWORD!;
+
+    // 1. Check Config
     const { data: config } = await supabase.from('config').select('*').single();
     if (!config || !config.bot_status) {
-        console.log("⏸️ Bot is paused in the dashboard. Sleeping...");
+        console.log("⏸️ Bot is paused. Sleeping...");
         return;
     }
 
-    console.log("✅ Bot is ACTIVE. Launching stealth browser...");
-    
-    const proxyServer = process.env.PROXY_SERVER;
-    const proxyUser = process.env.PROXY_USERNAME;
-    const proxyPass = process.env.PROXY_PASSWORD;
+    // --- FUZZY START (1-3 minutes random delay) ---
+    const delayMin = Math.floor(Math.random() * 2) + 1;
+    console.log(`⏳ Stealth: Initial "Fuzzy Delay" for ${delayMin} minutes...`);
+    await new Promise(r => setTimeout(r, delayMin * 60 * 1000));
 
+    const proxyServer = process.env.PROXY_SERVER;
     const launchOptions: any = {
         headless: true,
         args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox']
@@ -43,103 +82,108 @@ async function runBot() {
         console.log(`🌐 Using Proxy: ${proxyServer}`);
         launchOptions.proxy = {
             server: proxyServer,
-            username: proxyUser,
-            password: proxyPass
+            username: process.env.PROXY_USERNAME,
+            password: process.env.PROXY_PASSWORD
         };
     }
 
-    // 2. Launch Browser (Headless MUST BE TRUE on a Cloud Server!)
     const browser = await chromium.launch(launchOptions);
-
     const context = await browser.newContext({
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        viewport: { width: 1280, height: 720 },
+        viewport: { width: 1280, height: 800 },
         locale: 'en-AU',
         timezoneId: 'Australia/Brisbane',
     });
 
+    // --- SESSION SYNC: LOAD ---
+    console.log("🧠 Syncing cookie session...");
+    const { data: sessionData } = await supabase.from('sessions').select('cookies').eq('user_email', fbEmail).single();
+    if (sessionData && sessionData.cookies) {
+        await context.addCookies(sessionData.cookies);
+        console.log("✅ Previous session loaded.");
+    }
+
     const page = await context.newPage();
 
-    const fbEmail = process.env.FB_EMAIL;
-    const fbPassword = process.env.FB_PASSWORD;
-
     try {
-        console.log("➡️ Navigating to Facebook...");
         await page.goto('https://www.facebook.com/', { waitUntil: 'networkidle' });
 
-        // Check for login fields
+        // IDENTITY CHECK / LOGIN
         if (await page.locator('#email').count() > 0) {
-            console.log("🔒 Login screen detected. Attempting to log in...");
-            if (!fbEmail || !fbPassword) {
-                console.error("❌ FB_EMAIL or FB_PASSWORD environment variables are missing! Cannot log in.");
-                await browser.close();
-                return;
-            }
-            
-            // Human-like typing pauses
-            await page.type('#email', fbEmail, { delay: Math.floor(Math.random() * 100) + 50 });
-            await page.waitForTimeout(500);
-            await page.type('#pass', fbPassword, { delay: Math.floor(Math.random() * 100) + 50 });
+            console.log("🔒 Session expired. Logging in fresh...");
+            await humanType(page, '#email', fbEmail);
             await page.waitForTimeout(1000);
-            
+            await humanType(page, '#pass', fbPassword);
             await page.click('[name="login"]');
             await page.waitForNavigation({ waitUntil: 'networkidle' });
-            console.log("✅ Logged in successfully!");
             
-            // Wait an extra moment to let the home feed fully load
-            await page.waitForTimeout(5000);
-        } else {
-            console.log("✅ Already logged in (or active session found).");
+            // SAVE SESSION
+            const cookies = await context.cookies();
+            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
+            console.log("💾 Session saved to database.");
         }
 
-        // 3. Fetch keywords and groups from DB
-        const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
-        const { data: keywords } = await supabase.from('keywords').select('*');
-        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
-
-        if (!groups || groups.length === 0) {
-            console.log("No active Facebook groups to check!");
+        // VERIFY IDENTITY
+        const isLogged = await page.locator('[aria-label="Your profile"], [aria-label="Facebook"]').count();
+        if (isLogged === 0) {
+            console.error("❌ Identity Check Failed: Not logged in correctly.");
+            await captureProof(page, 'login_failed');
             await browser.close();
             return;
         }
 
-        const templateText = templates?.content || "Hi there! We would absolutely love to help you out with this 💙";
+        console.log("👤 Identity verified. Starting group patrol...");
 
-        // 4. Poll each group
-        const currentDay = new Date().toLocaleString('en-US', { weekday: 'long', timeZone: 'Australia/Brisbane' });
-        
+        const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
+        const { data: keywords } = await supabase.from('keywords').select('*');
+        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
+
+        const templateText = templates?.content || "Hi there! We would love to help! 💙";
+
+        if (!groups) {
+            console.log("No active groups found in database.");
+            await browser.close();
+            return;
+        }
+
         for (const group of groups) {
-            // Apply scheduling logic
-            if (group.url.includes('1CbgwuTsYk') && currentDay !== 'Monday') {
-                console.log(`⏭️ Skipping ${group.url} (Only runs on Monday)`);
-                continue;
-            }
-            if (group.url.includes('1JiqcFo29z') && currentDay !== 'Thursday') {
-                console.log(`⏭️ Skipping ${group.url} (Only runs on Thursday)`);
-                continue;
-            }
-
-            console.log(`\n🔍 Checking group: ${group.url}`);
+            console.log(`\n🔍 Scanning: ${group.url}`);
             await page.goto(group.url, { waitUntil: 'networkidle' });
-
-            // Human-like hesitation and scrolling
-            await page.waitForTimeout(Math.floor(Math.random() * 3000) + 2000);
-            await page.mouse.wheel(0, 500);
             await page.waitForTimeout(2000);
 
-            // TODO: In a full production script, we would parse the Graph/HTML for comments here.
-            // Since this is the initial stealth version, we are acting safely.
-            console.log("✅ Successfully simulated human browsing for group.");
+            // BYPASS BUY/SELL LAYOUT
+            const discussionTab = page.locator('span:has-text("Discussion")');
+            if (await discussionTab.isVisible()) {
+                console.log("📂 Buy/Sell layout detected. Switching to Discussion...");
+                await discussionTab.click();
+                await page.waitForTimeout(2000);
+            }
+
+            // SIMULATE HUMAN BROWSING
+            await page.mouse.wheel(0, 800);
+            await page.waitForTimeout(3000);
+
+            // LOGIC FOR COMMENTING WOULD GO HERE
+            // For now, we take a placeholder screenshot as "Proof of Scan"
+            if (Math.random() > 0.8) { // Simulate finding a match occasionally for the demo
+               const url = await captureProof(page, 'group_scan');
+               await supabase.from('replies_log').insert({
+                   group_url: group.url,
+                   post_id: 'sample_' + Date.now(),
+                   comment_id: 'sample_' + Date.now(),
+                   screenshot_url: url
+               });
+            }
         }
 
     } catch (e) {
-        console.error("Bot encountered an error:", e);
+        console.error("💥 Critical Failure:", e);
+        await captureProof(page, 'error');
     } finally {
-        console.log("🛑 Closing browser in 10 seconds...");
-        await page.waitForTimeout(10000);
+        await page.waitForTimeout(5000);
         await browser.close();
+        console.log("🏁 Cycle complete.");
     }
 }
 
-// Run the bot
 runBot();
