@@ -167,7 +167,7 @@ async function runBot() {
         const { data: keywords } = await supabase.from('keywords').select('*');
         const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
 
-        const templateText = templates?.content || "Hi there! We are fully insured and police checked, and we would absolutely love to help you out 💙 You can view our prices and book directly in 60 seconds right here: https://www.fiestafreshcleaning.com/book ✨ Or send a direct message to https://www.facebook.com/share/1KZ42C9jSc/?mibextid=wwXIfr 💙";
+        const templateText = templates?.content || "Hi there! We are fully insured and police checked, and we would absolutely love to help you out 💙 You can view our prices and book directly in 60 seconds right here: https://www.fiestafreshcleaning.com/book ✨ Or send a direct message to @Fiesta Fresh Cleaning 💙";
 
         if (!groups) return;
 
@@ -231,7 +231,31 @@ async function runBot() {
                     if (await commentBox.isVisible()) {
                         await commentBox.click();
                         await page.waitForTimeout(1000);
-                        await humanType(page, '[role="textbox"]:focus', templateText);
+
+                        // --- NEW: FACEBOOK NATIVE TAGGING LOGIC ---
+                        const tagToken = "@Fiesta Fresh Cleaning";
+                        if (templateText.includes(tagToken)) {
+                            const parts = templateText.split(tagToken);
+                            
+                            // 1. Type everything before the tag
+                            await humanType(page, '[role="textbox"]:focus', parts[0]);
+                            
+                            // 2. Type the tag slowly to trigger Facebook's dropdown menu
+                            await page.keyboard.type(tagToken, { delay: 150 });
+                            await page.waitForTimeout(2000); // Wait for popup to render
+                            
+                            // 3. Press Enter to select the page from the list so it turns BLUE
+                            await page.keyboard.press('Enter');
+                            await page.waitForTimeout(800);
+                            
+                            // 4. Type the rest of the message
+                            if (parts.length > 1 && parts[1].length > 0) {
+                                await humanType(page, '[role="textbox"]:focus', parts[1]);
+                            }
+                        } else {
+                            // Fallback if the template doesn't contain the tag token
+                            await humanType(page, '[role="textbox"]:focus', templateText);
+                        }
                         
                         // --- CRITICAL: Log ATTEMPT to DB first to prevent race conditions ---
                         const { error: logError } = await supabase.from('replies_log').insert({
