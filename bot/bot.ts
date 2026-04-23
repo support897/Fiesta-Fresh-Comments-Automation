@@ -166,7 +166,7 @@ async function runBot() {
         const { data: keywords } = await supabase.from('keywords').select('*');
         const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
 
-        const templateText = templates?.content || "Hi there! We would love to help! 💙";
+        const templateText = templates?.content || "Hi there! We are fully insured and police checked, and we would absolutely love to help you out 💙 You can view our prices and book directly in 60 seconds right here: https://www.fiestafreshcleaning.com/book ✨ Or send a direct message to https://www.facebook.com/share/1KZ42C9jSc/?mibextid=wwXIfr 💙";
 
         if (!groups) return;
 
