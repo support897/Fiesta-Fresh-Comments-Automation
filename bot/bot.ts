@@ -73,22 +73,10 @@ async function runBot() {
     // await new Promise(r => setTimeout(r, delayMin * 60 * 1000));
 
     const proxyServer = process.env.PROXY_SERVER;
-    const launchOptions: any = {
-        headless: true,
-        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox']
-    };
-
-    // if (proxyServer) {
-    //     console.log(`🌐 Using Proxy: ${proxyServer}`);
-    //     launchOptions.proxy = {
-    //         server: proxyServer
-    //     };
-    // }
-
     const userDataDir = path.join(__dirname, 'FiestaSession');
     console.log(`🧠 Using Persistent Context: ${userDataDir}`);
 
-    const context = await chromium.launchPersistentContext(userDataDir, {
+    const contextOptions: any = {
         headless: true,
         args: [
             '--disable-blink-features=AutomationControlled',
@@ -100,7 +88,20 @@ async function runBot() {
         viewport: { width: 1280, height: 800 },
         locale: 'en-AU',
         timezoneId: 'Australia/Brisbane',
-    });
+    };
+
+    if (proxyServer) {
+        console.log(`🌐 Using Proxy: ${proxyServer}`);
+        contextOptions.proxy = { server: proxyServer };
+    }
+
+    const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
+
+    if (contextOptions.proxy && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
+        await context.setExtraHTTPHeaders({
+            'Proxy-Authorization': 'Basic ' + Buffer.from(`${process.env.PROXY_USERNAME}:${process.env.PROXY_PASSWORD}`).toString('base64')
+        });
+    }
 
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
