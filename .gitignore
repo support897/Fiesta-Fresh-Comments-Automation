@@ -1,3 +1,10 @@
 node_modules/
 .env*
 .next/
+dist/
+*.db
+*.db-journal
+FiestaSession/
+proofs/
+test_sqlite_write.ts
+test_db.ts

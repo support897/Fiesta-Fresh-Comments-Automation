@@ -55,3 +55,22 @@ CREATE TABLE public.replies_log (
 -- Ensure we can easily query to prevent duplicates:
 CREATE INDEX idx_replies_log_comment_id ON public.replies_log(comment_id);
 CREATE INDEX idx_replies_log_post_user ON public.replies_log(post_id, user_profile_id);
+
+-- 6. Leads Table (Scraped Posts for Human Review)
+CREATE TABLE public.leads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    post_id TEXT NOT NULL UNIQUE,
+    group_url TEXT NOT NULL,
+    post_text TEXT NOT NULL,
+    status TEXT DEFAULT 'pending', -- pending, approved, rejected, posted
+    rejection_reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- 7. AI Memory Table (Stores extracted rules from rejections)
+CREATE TABLE public.ai_memory (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_text TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
