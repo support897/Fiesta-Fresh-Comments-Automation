@@ -2,16 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { Sparkles, Activity, MessageSquare, Layers, Power, Save, ChevronRight, Check } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
-import SwipePage from "./swipe/page";
-
-type StatItem = {
-  label: string;
-  value: string | number;
-  icon: React.ReactNode;
-  color: string;
-};
+import { supabase, isConfigured } from "@/lib/supabaseClient";
 
 type ActivityItem = {
   group_url: string;
@@ -20,10 +11,6 @@ type ActivityItem = {
 };
 
 export default function Dashboard() {
-  if (process.env.NEXT_PUBLIC_IS_MOBILE_APP === "true") {
-    return <SwipePage />;
-  }
-
   const [isBotActive, setIsBotActive] = useState(false);
   const [template, setTemplate] = useState("");
   const [stats, setStats] = useState({ total: 0, pending: 0, approved: 0, posted: 0, groups: 0 });
@@ -32,27 +19,30 @@ export default function Dashboard() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [configId, setConfigId] = useState<string | null>(null);
+  const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {
+    setIsClient(true);
     fetchDashboardData();
   }, []);
 
   const fetchDashboardData = async () => {
+    if (!isConfigured) {
+      setLoading(false);
+      return;
+    }
     try {
-      // 1. Get Config
       const { data: config } = await supabase.from('config').select('*').single();
       if (config) {
         setIsBotActive(!!config.bot_status);
         setConfigId(config.id);
       }
 
-      // 2. Get Template
       const { data: templateData } = await supabase.from('templates').select('*').eq('is_active', true).single();
       if (templateData) {
         setTemplate(templateData.content);
       }
 
-      // 3. Get Stats counts
       const { count: total } = await supabase.from('leads').select('*', { count: 'exact', head: true });
       const { count: pending } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'pending');
       const { count: approved } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'approved');
@@ -67,7 +57,6 @@ export default function Dashboard() {
         groups: groups || 0
       });
 
-      // 4. Get Recent Activity
       const { data: recent } = await supabase
         .from('leads')
         .select('group_url, post_text, updated_at')
@@ -94,7 +83,7 @@ export default function Dashboard() {
       }
     } catch (e) {
       console.error("Failed to toggle bot status:", e);
-      setIsBotActive(!nextStatus); // Revert UI
+      setIsBotActive(!nextStatus);
     }
   };
 
@@ -113,191 +102,394 @@ export default function Dashboard() {
     }
   };
 
-  const statItems: StatItem[] = [
-    { 
-      label: "Pending Review", 
-      value: stats.pending, 
-      icon: <Layers className="w-5 h-5 text-amber-400" />,
-      color: "border-amber-500/20 bg-amber-500/5 hover:border-amber-500/30"
-    },
-    { 
-      label: "Total Posted", 
-      value: stats.posted, 
-      icon: <MessageSquare className="w-5 h-5 text-emerald-400" />,
-      color: "border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/30"
-    },
-    { 
-      label: "Active Groups", 
-      value: stats.groups, 
-      icon: <Activity className="w-5 h-5 text-blue-400" />,
-      color: "border-blue-500/20 bg-blue-500/5 hover:border-blue-500/30"
-    },
-  ];
+  const getGroupName = (url: string) => {
+    if (!url) return 'Unknown Group';
+    try {
+      const clean = url.replace('https://www.facebook.com/groups/', '').replace('https://www.facebook.com/share/g/', '');
+      return clean.split('/')[0] || 'Facebook Group';
+    } catch {
+      return 'Facebook Group';
+    }
+  };
+
+  if (!isClient) return null;
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#090b11] text-white flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-gray-400 text-sm font-semibold tracking-wide">Loading Fiesta Dashboard...</p>
-        </div>
+      <div style={{
+        minHeight: '100vh',
+        background: '#090b11',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: '16px'
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          border: '3px solid rgba(59, 130, 246, 0.2)',
+          borderTop: '3px solid #3b82f6',
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite'
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <p style={{ color: '#64748b', fontSize: '0.85rem', fontWeight: 600, letterSpacing: '0.05em' }}>
+          Loading Fiesta Dashboard...
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#090b11] text-white p-6 pb-20 sm:p-12 font-sans selection:bg-[#0070f3] selection:text-white">
-      {/* Background gradients */}
-      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-blue-500/10 blur-[130px] mix-blend-screen" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-teal-500/10 blur-[150px] mix-blend-screen" />
+    <div style={{
+      minHeight: '100vh',
+      background: '#090b11',
+      color: 'white',
+      padding: '32px 24px 80px 24px',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      position: 'relative',
+      overflow: 'hidden'
+    }}>
+      {/* Ambient Background Glow */}
+      <div style={{
+        position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0
+      }}>
+        <div style={{
+          position: 'absolute', top: '-15%', left: '-10%', width: '50%', height: '50%',
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)',
+          filter: 'blur(80px)'
+        }} />
+        <div style={{
+          position: 'absolute', bottom: '-15%', right: '-10%', width: '50%', height: '50%',
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(20,184,166,0.06) 0%, transparent 70%)',
+          filter: 'blur(80px)'
+        }} />
       </div>
 
-      <div className="max-w-6xl mx-auto space-y-12">
-        {/* Header */}
-        <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+      <div style={{ maxWidth: '1200px', margin: '0 auto', position: 'relative', zIndex: 1 }}>
+
+        {/* ── HEADER ── */}
+        <header style={{
+          display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: '40px', gap: '24px'
+        }}>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="p-2 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400">
-                <Sparkles className="w-5 h-5 animate-pulse" />
-              </span>
-              <span className="text-xs font-bold tracking-widest text-blue-400 uppercase">Automation Engine</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+              <div style={{
+                width: '36px', height: '36px', borderRadius: '10px',
+                background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '1.1rem', fontWeight: 800, color: 'white',
+                boxShadow: '0 4px 16px rgba(59,130,246,0.3)'
+              }}>F</div>
+              <span style={{
+                fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase',
+                color: '#60a5fa', background: 'rgba(59,130,246,0.1)', padding: '4px 12px',
+                borderRadius: '20px', border: '1px solid rgba(59,130,246,0.2)'
+              }}>Automation Engine</span>
             </div>
-            <h1 className="text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-sky-400 to-teal-300 mt-2">
+            <h1 style={{
+              fontSize: 'clamp(1.8rem, 4vw, 2.5rem)', fontWeight: 800, letterSpacing: '-0.03em',
+              background: 'linear-gradient(135deg, #60a5fa, #38bdf8, #2dd4bf)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              lineHeight: 1.2
+            }}>
               Fiesta Fresh Cleaning
             </h1>
-            <p className="text-gray-400 mt-2 text-lg">Facebook Lead Generation & Reply Dashboard.</p>
+            <p style={{ color: '#64748b', marginTop: '6px', fontSize: '0.95rem', fontWeight: 500 }}>
+              Facebook Lead Generation & Reply Dashboard
+            </p>
           </div>
-          
-          <div className="flex items-center gap-4 bg-white/5 border border-white/10 px-6 py-4 rounded-2xl backdrop-blur-md shadow-2xl transition-all hover:bg-white/10">
-            <span className="font-semibold text-gray-200 flex items-center gap-2">
-              <Power className={`w-4 h-4 ${isBotActive ? 'text-teal-400 animate-pulse' : 'text-gray-500'}`} />
-              Bot Controller
-            </span>
-            <button 
+
+          {/* Bot Controller */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '16px',
+            background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255,255,255,0.06)', padding: '16px 24px',
+            borderRadius: '20px', boxShadow: '0 8px 32px rgba(0,0,0,0.3)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isBotActive ? '#2dd4bf' : '#475569'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" /><line x1="12" y1="2" x2="12" y2="12" />
+              </svg>
+              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#e2e8f0' }}>Bot Controller</span>
+            </div>
+            <button
               onClick={handleToggleBot}
-              className={`relative w-16 h-8 rounded-full transition-colors duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-[#090b11] ${isBotActive ? 'bg-gradient-to-r from-blue-500 to-teal-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'bg-gray-700'}`}
+              style={{
+                position: 'relative', width: '56px', height: '28px', borderRadius: '14px',
+                border: 'none', cursor: 'pointer', transition: 'all 0.3s ease',
+                background: isBotActive
+                  ? 'linear-gradient(135deg, #3b82f6, #2dd4bf)'
+                  : '#1e293b',
+                boxShadow: isBotActive ? '0 0 20px rgba(59,130,246,0.4)' : 'inset 0 2px 4px rgba(0,0,0,0.3)'
+              }}
             >
-              <span className={`absolute left-1 top-1 w-6 h-6 bg-white rounded-full transition-transform duration-300 ease-in-out ${isBotActive ? 'translate-x-8' : 'translate-x-0'} shadow-sm`} />
+              <div style={{
+                position: 'absolute', top: '3px',
+                left: isBotActive ? '31px' : '3px',
+                width: '22px', height: '22px', borderRadius: '50%',
+                background: 'white', transition: 'left 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55)',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
+              }} />
             </button>
-            <span className={`font-bold ml-1 text-sm ${isBotActive ? 'text-teal-400' : 'text-gray-500'}`}>
+            <span style={{
+              fontWeight: 800, fontSize: '0.75rem', letterSpacing: '0.1em',
+              color: isBotActive ? '#2dd4bf' : '#475569'
+            }}>
               {isBotActive ? 'RUNNING' : 'PAUSED'}
             </span>
           </div>
         </header>
 
-        {/* Swipe Callout */}
+        {/* ── PENDING BANNER ── */}
         {stats.pending > 0 && (
-          <div className="bg-gradient-to-r from-blue-600/30 to-teal-600/20 border border-blue-500/30 rounded-3xl p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-xl">
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(20,184,166,0.1))',
+            border: '1px solid rgba(59,130,246,0.2)', borderRadius: '24px',
+            padding: '28px 32px', marginBottom: '32px',
+            display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between',
+            alignItems: 'center', gap: '20px',
+            boxShadow: '0 8px 32px rgba(59,130,246,0.08)',
+            animation: 'float-in 0.5s ease-out'
+          }}>
             <div>
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Layers className="text-blue-400 w-5 h-5" />
+              <h2 style={{
+                fontSize: '1.25rem', fontWeight: 800, display: 'flex',
+                alignItems: 'center', gap: '10px', color: '#f1f5f9'
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+                </svg>
                 You have {stats.pending} pending post{stats.pending > 1 ? 's' : ''} to review!
               </h2>
-              <p className="text-gray-300 text-sm mt-1">Review matches and swipe to approve or deny comments.</p>
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>
+                Review matches and swipe to approve or deny comments.
+              </p>
             </div>
-            <Link 
-              href="/swipe" 
-              className="px-6 py-3 bg-blue-500 hover:bg-blue-600 active:scale-95 transition-all text-white font-bold rounded-xl flex items-center gap-2 shadow-lg shadow-blue-500/25 shrink-0"
+            <Link href="/swipe" style={{
+              padding: '12px 24px', background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+              color: 'white', fontWeight: 700, fontSize: '0.9rem', borderRadius: '14px',
+              textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '8px',
+              boxShadow: '0 4px 16px rgba(59,130,246,0.3)',
+              transition: 'transform 0.2s, box-shadow 0.2s'
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(59,130,246,0.4)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(59,130,246,0.3)'; }}
             >
               Go to Swipe Deck
-              <ChevronRight className="w-4 h-4" />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
             </Link>
           </div>
         )}
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          {statItems.map((stat, i) => (
-            <div key={i} className={`group border rounded-3xl p-6 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 ${stat.color}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-gray-400 font-medium text-sm">{stat.label}</h3>
-                {stat.icon}
+        {/* ── STAT CARDS ── */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '20px', marginBottom: '32px'
+        }}>
+          {[
+            { label: 'Pending Review', value: stats.pending, color: '#f59e0b', bgColor: 'rgba(245,158,11,0.06)', borderColor: 'rgba(245,158,11,0.15)' },
+            { label: 'Total Posted', value: stats.posted, color: '#10b981', bgColor: 'rgba(16,185,129,0.06)', borderColor: 'rgba(16,185,129,0.15)' },
+            { label: 'Active Groups', value: stats.groups, color: '#3b82f6', bgColor: 'rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.15)' },
+          ].map((stat, i) => (
+            <div key={i} style={{
+              background: stat.bgColor, border: `1px solid ${stat.borderColor}`,
+              borderRadius: '20px', padding: '24px', backdropFilter: 'blur(12px)',
+              transition: 'all 0.3s ease', cursor: 'default',
+              animation: `float-in 0.5s ease-out ${0.1 * (i + 1)}s both`
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.borderColor = stat.color; }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = stat.borderColor; }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <span style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600 }}>{stat.label}</span>
+                <div style={{
+                  width: '36px', height: '36px', borderRadius: '10px',
+                  background: `${stat.color}15`, display: 'flex',
+                  alignItems: 'center', justifyContent: 'center'
+                }}>
+                  {stat.label === 'Pending Review' && (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={stat.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+                    </svg>
+                  )}
+                  {stat.label === 'Total Posted' && (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={stat.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  )}
+                  {stat.label === 'Active Groups' && (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={stat.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                    </svg>
+                  )}
+                </div>
               </div>
-              <span className="text-4xl font-extrabold text-white">{stat.value}</span>
+              <span style={{ fontSize: '2.5rem', fontWeight: 800, color: '#f1f5f9', lineHeight: 1 }}>{stat.value}</span>
             </div>
           ))}
         </div>
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-          
-          {/* Template Editor */}
-          <div className="lg:col-span-3 bg-white/[0.02] border border-white/5 rounded-3xl p-8 backdrop-blur-xl shadow-2xl flex flex-col justify-between">
-            <div>
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-gray-100 flex items-center gap-3">
-                  <MessageSquare className="w-5 h-5 text-blue-400" />
+        {/* ── MAIN CONTENT GRID ── */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr', gap: '28px'
+        }}>
+          {/* On larger screens, use CSS media query workaround */}
+          <style>{`
+            @media (min-width: 768px) {
+              .dashboard-grid { grid-template-columns: 3fr 2fr !important; }
+            }
+          `}</style>
+          <div className="dashboard-grid" style={{
+            display: 'grid', gridTemplateColumns: '1fr', gap: '28px'
+          }}>
+
+            {/* Template Editor */}
+            <div style={{
+              background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+              borderRadius: '24px', padding: '32px', backdropFilter: 'blur(12px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+              animation: 'float-in 0.5s ease-out 0.4s both'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', color: '#f1f5f9' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
                   Primary Reply Copy
                 </h2>
-                <button 
+                <button
                   onClick={handleSaveTemplate}
                   disabled={savingTemplate}
-                  className={`text-sm py-2.5 px-4 rounded-xl font-semibold flex items-center gap-2 transition-all ${saveSuccess ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-blue-500 hover:bg-blue-600 active:scale-95 text-white shadow-md shadow-blue-500/10'}`}
+                  style={{
+                    padding: '10px 20px', borderRadius: '12px',
+                    fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    transition: 'all 0.2s',
+                    background: saveSuccess
+                      ? 'rgba(16,185,129,0.15)' : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                    color: saveSuccess ? '#10b981' : 'white',
+                    border: saveSuccess ? '1px solid rgba(16,185,129,0.3)' : '1px solid transparent',
+                    boxShadow: saveSuccess ? 'none' : '0 4px 12px rgba(59,130,246,0.2)',
+                    opacity: savingTemplate ? 0.7 : 1
+                  }}
                 >
                   {saveSuccess ? (
                     <>
-                      <Check className="w-4 h-4" />
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
                       Saved!
                     </>
                   ) : (
                     <>
-                      <Save className="w-4 h-4" />
-                      {savingTemplate ? "Saving..." : "Save Copy"}
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                      </svg>
+                      {savingTemplate ? 'Saving...' : 'Save Copy'}
                     </>
                   )}
                 </button>
               </div>
-              
-              <p className="text-sm text-gray-400 mb-4">This message is posted automatically to approved posts when the bot patrols.</p>
-              
-              <textarea 
+
+              <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: '16px', lineHeight: 1.5 }}>
+                This message is posted automatically to approved posts when the bot patrols.
+              </p>
+
+              <textarea
                 value={template}
                 onChange={(e) => setTemplate(e.target.value)}
-                className="w-full min-h-[320px] bg-black/40 border border-white/10 rounded-2xl p-5 text-gray-200 font-medium leading-relaxed resize-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-inner"
-                spellCheck="false"
+                spellCheck={false}
                 placeholder="Write your template copy here..."
+                style={{
+                  width: '100%', minHeight: '320px',
+                  background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)',
+                  borderRadius: '16px', padding: '20px', color: '#e2e8f0',
+                  fontSize: '0.9rem', fontWeight: 500, lineHeight: 1.7,
+                  resize: 'vertical', fontFamily: 'inherit',
+                  outline: 'none', transition: 'border-color 0.2s',
+                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.2)'
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = 'rgba(59,130,246,0.4)'; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'; }}
               />
             </div>
-          </div>
 
-          {/* Recent Replies Feed */}
-          <div className="lg:col-span-2 bg-white/[0.02] border border-white/5 rounded-3xl p-8 backdrop-blur-xl shadow-2xl flex flex-col">
-            <h2 className="text-2xl font-bold text-gray-100 mb-6 flex items-center gap-3">
-              <Activity className="w-5 h-5 text-teal-400" />
-              Recent Posts Replied To
-            </h2>
-            
-            <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
-              {recentActivity.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-center p-6 border border-dashed border-white/5 rounded-2xl bg-white/[0.01]">
-                  <p className="text-sm text-gray-500">No comments posted yet. Approve matching posts in the Swipe Deck to execute them!</p>
-                </div>
-              ) : (
-                recentActivity.map((item, i) => (
-                  <div key={i} className="p-4 rounded-2xl bg-white/[0.01] border border-white/5 hover:border-white/10 transition-colors flex items-start gap-4">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500/20 to-teal-400/20 border border-blue-500/30 flex items-center justify-center text-sm font-bold text-blue-400 shrink-0 shadow-sm">
-                      FB
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-start">
-                        <span className="text-xs font-semibold text-gray-200 uppercase tracking-wide truncate max-w-[150px]">
-                          {item.group_url.replace('https://www.facebook.com/share/g/', '').replace('https://www.facebook.com/groups/', '').split('/')[0]}
-                        </span>
-                        <span className="text-[10px] text-gray-500">
-                          {new Date(item.updated_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-400 line-clamp-3 mt-1.5 leading-relaxed">
-                        "{item.post_text}"
-                      </p>
-                    </div>
+            {/* Recent Activity */}
+            <div style={{
+              background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+              borderRadius: '24px', padding: '32px', backdropFilter: 'blur(12px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column',
+              animation: 'float-in 0.5s ease-out 0.5s both'
+            }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '10px', color: '#f1f5f9', marginBottom: '24px' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                Recent Posts Replied To
+              </h2>
+
+              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {recentActivity.length === 0 ? (
+                  <div style={{
+                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    textAlign: 'center', padding: '40px 24px',
+                    border: '1px dashed rgba(255,255,255,0.06)', borderRadius: '16px',
+                    background: 'rgba(255,255,255,0.01)'
+                  }}>
+                    <p style={{ color: '#475569', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                      No comments posted yet. Approve matching posts in the Swipe Deck to start!
+                    </p>
                   </div>
-                ))
-              )}
+                ) : (
+                  recentActivity.map((item, i) => (
+                    <div key={i} style={{
+                      padding: '16px', borderRadius: '16px',
+                      background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)',
+                      display: 'flex', alignItems: 'flex-start', gap: '14px',
+                      transition: 'border-color 0.2s'
+                    }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; }}
+                    >
+                      <div style={{
+                        width: '40px', height: '40px', borderRadius: '50%',
+                        background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(20,184,166,0.15))',
+                        border: '1px solid rgba(59,130,246,0.2)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.75rem', fontWeight: 800, color: '#60a5fa', flexShrink: 0
+                      }}>FB</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{
+                            fontSize: '0.75rem', fontWeight: 700, color: '#e2e8f0',
+                            textTransform: 'uppercase', letterSpacing: '0.04em',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px'
+                          }}>
+                            {getGroupName(item.group_url)}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: '#475569', flexShrink: 0 }}>
+                            {new Date(item.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                          </span>
+                        </div>
+                        <p style={{
+                          fontSize: '0.8rem', color: '#64748b', marginTop: '6px',
+                          lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 3,
+                          WebkitBoxOrient: 'vertical', overflow: 'hidden'
+                        }}>
+                          &ldquo;{item.post_text}&rdquo;
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
-          
         </div>
       </div>
     </div>
