@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { motion, useAnimation, PanInfo } from 'framer-motion';
-import { Check, X, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Check, MessageSquare, Loader, Sparkles, AlertCircle, Info, RefreshCw, Home } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
+import Link from 'next/link';
 
 type Lead = {
   id: string;
@@ -16,196 +16,628 @@ type Lead = {
 export default function SwipePage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [rejectReason, setRejectReason] = useState("");
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [feedbackError, setFeedbackError] = useState(false);
+  
+  // Custom Toast state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  const controls = useAnimation();
+  // Swipe gesture state
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+  const [isMouseDown, setIsMouseDown] = useState(false);
+  const [mouseStartX, setMouseStartX] = useState<number | null>(null);
 
-  useEffect(() => {
-    fetchLeads();
-  }, []);
+  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   const fetchLeads = async () => {
-    setLoading(true);
+    if (isSyncing) return;
     try {
+      if (!supabase) {
+        console.warn("Supabase client is not initialized.");
+        return;
+      }
       const { data, error } = await supabase
         .from('leads')
         .select('*')
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
 
+      if (error) throw error;
       if (data) {
         setLeads(data);
       }
-    } catch (e) {
-      console.error("Failed to fetch leads:", e);
-    }
-    setLoading(false);
-  };
-
-  const handleApprove = async (id: string) => {
-    try {
-      await supabase.from('leads').update({ status: 'approved' }).eq('id', id);
-      setLeads((prev) => prev.filter((l) => l.id !== id));
-    } catch (e) {
-      console.error("Failed to approve lead:", e);
+    } catch (err) {
+      console.error("Error fetching leads from Supabase:", err);
+      showToast("Could not connect to database.", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleRejectPrompt = (id: string) => {
-    setActiveLeadId(id);
-    setShowRejectModal(true);
-  };
+  useEffect(() => {
+    fetchLeads();
+    const interval = setInterval(fetchLeads, 6000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const confirmReject = async () => {
-    if (!activeLeadId) return;
-    
+  const currentLead = leads[0]; // Active lead to review
+
+  const updateLeadStatus = async (leadId: string, newStatus: 'approved' | 'rejected', rejectionReason?: string) => {
+    setIsSyncing(true);
+
+    // Optimistic UI update - filter out the card immediately
+    const remainingLeads = leads.filter(l => l.id !== leadId);
+    setLeads(remainingLeads);
+
     try {
-      // 1. Update lead status in Supabase
-      await supabase.from('leads').update({ 
-        status: 'rejected', 
-        rejection_reason: rejectReason 
-      }).eq('id', activeLeadId);
+      if (!supabase) throw new Error("Supabase not initialized");
 
-      // 2. Log feedback into AI memory for training
-      if (rejectReason.trim()) {
-        await supabase.from('ai_memory').insert({
-          rule_text: rejectReason
-        });
+      // 1. Update lead status
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ 
+          status: newStatus, 
+          updated_at: new Date().toISOString(),
+          rejection_reason: rejectionReason || null
+        })
+        .eq('id', leadId);
+
+      if (updateError) throw updateError;
+
+      // 2. If rejected and has reason, insert into AI Memory for training
+      if (newStatus === 'rejected' && rejectionReason?.trim()) {
+        const { error: aiError } = await supabase
+          .from('ai_memory')
+          .insert({
+            rule_text: rejectionReason.trim(),
+            created_at: new Date().toISOString()
+          });
+        
+        if (aiError) {
+          console.error("AI memory log failed:", aiError);
+        } else {
+          showToast("AI trained from rejection! 🧠", "info");
+        }
+      } else if (newStatus === 'approved') {
+        showToast("Lead approved! Comment queued. 💙", "success");
       }
-
-      setLeads((prev) => prev.filter((l) => l.id !== activeLeadId));
-    } catch (e) {
-      console.error("Failed to reject lead:", e);
+    } catch (err) {
+      console.error("Error updating lead status:", err);
+      showToast("Sync error — reloading queue.", "error");
+      fetchLeads(); // Reload real state
+    } finally {
+      setTimeout(() => setIsSyncing(false), 2000);
     }
-
-    setShowRejectModal(false);
-    setRejectReason("");
-    setActiveLeadId(null);
   };
 
-  const handleDragEnd = async (event: any, info: PanInfo, id: string) => {
-    const threshold = 100;
-    if (info.offset.x > threshold) {
-      // Swipe Right -> Approve
-      controls.start({ x: 500, opacity: 0 });
-      await handleApprove(id);
-    } else if (info.offset.x < -threshold) {
-      // Swipe Left -> Reject
-      controls.start({ x: -500, opacity: 0 });
-      handleRejectPrompt(id);
+  const handleApprove = () => {
+    if (currentLead) {
+      updateLeadStatus(currentLead.id, 'approved');
+    }
+  };
+
+  const handleReject = () => {
+    setFeedbackError(false);
+    setShowFeedback(true);
+  };
+
+  const submitFeedback = () => {
+    if (!feedbackText.trim()) {
+      setFeedbackError(true);
+      return;
+    }
+    if (currentLead) {
+      updateLeadStatus(currentLead.id, 'rejected', feedbackText.trim());
+    }
+    setShowFeedback(false);
+    setFeedbackText('');
+    setFeedbackError(false);
+  };
+
+  // Touch gesture handlers (Mobile)
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (showFeedback || loading) return;
+    setTouchStartX(e.targetTouches[0].clientX);
+    setTouchStartY(e.targetTouches[0].clientY);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartX === null || touchStartY === null || showFeedback || loading) return;
+    const currentX = e.targetTouches[0].clientX;
+    const currentY = e.targetTouches[0].clientY;
+    const diffX = currentX - touchStartX;
+    const diffY = currentY - touchStartY;
+
+    if (Math.abs(diffX) > Math.abs(diffY)) {
+      e.preventDefault();
+      setSwipeOffset(diffX);
+      if (diffX > 40) {
+        setSwipeDirection('right');
+      } else if (diffX < -40) {
+        setSwipeDirection('left');
+      } else {
+        setSwipeDirection(null);
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (touchStartX === null || showFeedback || loading) return;
+    if (swipeOffset > 110) {
+      handleApprove();
+    } else if (swipeOffset < -110) {
+      handleReject();
+    }
+    setTouchStartX(null);
+    setTouchStartY(null);
+    setSwipeOffset(0);
+    setSwipeDirection(null);
+  };
+
+  // Mouse drag handlers (Desktop fallback)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (showFeedback || loading) return;
+    setIsMouseDown(true);
+    setMouseStartX(e.clientX);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isMouseDown || mouseStartX === null || showFeedback || loading) return;
+    const diffX = e.clientX - mouseStartX;
+    setSwipeOffset(diffX);
+    if (diffX > 40) {
+      setSwipeDirection('right');
+    } else if (diffX < -40) {
+      setSwipeDirection('left');
     } else {
-      // Snap back
-      controls.start({ x: 0, opacity: 1 });
+      setSwipeDirection(null);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-950 text-white">
-        <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
-      </div>
-    );
-  }
+  const handleMouseUp = () => {
+    if (!isMouseDown || mouseStartX === null || showFeedback || loading) return;
+    if (swipeOffset > 110) {
+      handleApprove();
+    } else if (swipeOffset < -110) {
+      handleReject();
+    }
+    setIsMouseDown(false);
+    setMouseStartX(null);
+    setSwipeOffset(0);
+    setSwipeDirection(null);
+  };
+
+  // Styles
+  const cardStyle: React.CSSProperties = {
+    width: '92%',
+    height: '65%',
+    maxWidth: '420px',
+    maxHeight: '580px',
+    borderRadius: '28px',
+    position: 'relative',
+    boxShadow: '0 30px 60px -15px rgba(0, 0, 0, 0.7)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    transform: `translateX(${swipeOffset}px) rotate(${swipeOffset * 0.03}deg)`,
+    transition: touchStartX !== null || isMouseDown ? 'none' : 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.2)',
+    cursor: isMouseDown ? 'grabbing' : 'grab',
+    touchAction: 'none',
+    userSelect: 'none',
+    backgroundColor: '#0f172a',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden'
+  };
+
+  const stampStyle = (type: 'like' | 'nope'): React.CSSProperties => ({
+    position: 'absolute',
+    top: '30px',
+    [type === 'like' ? 'left' : 'right']: '30px',
+    border: `4px solid ${type === 'like' ? '#10B981' : '#EF4444'}`,
+    color: type === 'like' ? '#10B981' : '#EF4444',
+    padding: '8px 18px',
+    borderRadius: '12px',
+    fontSize: '1.8rem',
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    transform: `rotate(${type === 'like' ? -12 : 12}deg)`,
+    opacity: type === 'like' 
+      ? Math.min(Math.max(swipeOffset / 90, 0), 1) 
+      : Math.min(Math.max(-swipeOffset / 90, 0), 1),
+    transition: 'opacity 0.05s ease-out',
+    zIndex: 100,
+    textShadow: '0 0 8px rgba(0,0,0,0.5)',
+    boxShadow: `0 0 12px ${type === 'like' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`
+  });
+
+  // Safe formatting for Facebook group URLs
+  const getGroupName = (url: string) => {
+    if (!url) return 'Unknown Group';
+    try {
+      const clean = url.replace('https://www.facebook.com/groups/', '').replace('https://www.facebook.com/share/g/', '');
+      return clean.split('/')[0] || 'Facebook Group';
+    } catch {
+      return 'Facebook Group';
+    }
+  };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden font-sans">
-      <header className="p-4 flex items-center justify-between border-b border-gray-800 bg-gray-900/50 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center font-bold">F</div>
-          <h1 className="text-xl font-semibold tracking-tight">Fiesta Swipe Deck</h1>
-        </div>
-        <span className="text-sm text-gray-400">{leads.length} Pending</span>
-      </header>
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      width: '100vw',
+      height: '100vh',
+      background: 'radial-gradient(circle at top, #1e293b, #030712)',
+      zIndex: 9999,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: 'white',
+      overflow: 'hidden',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Keyframe Injection */}
+      <style>{`
+        @keyframes slideDown {
+          from { transform: translate(-50%, -20px); opacity: 0; }
+          to { transform: translate(-50%, 0); opacity: 1; }
+        }
+        @keyframes slideUpSheet {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+        @keyframes spinSlow {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
 
-      <main className="flex-1 relative flex items-center justify-center p-4">
-        {leads.length === 0 ? (
-          <div className="text-center text-gray-400">
-            <h2 className="text-2xl font-bold mb-2">You're caught up!</h2>
-            <p>No more pending posts to review.</p>
+      {/* Toast Alerts */}
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          top: '72px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          backgroundColor: toast.type === 'success' ? 'rgba(16, 185, 129, 0.95)' : toast.type === 'info' ? 'rgba(59, 130, 246, 0.95)' : 'rgba(239, 68, 68, 0.95)',
+          backdropFilter: 'blur(10px)',
+          color: 'white',
+          padding: '12px 24px',
+          borderRadius: '14px',
+          fontSize: '0.9rem',
+          fontWeight: 'bold',
+          zIndex: 999999,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          textAlign: 'center',
+          animation: 'slideDown 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
+          maxWidth: '90%'
+        }}>
+          {toast.message}
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{
+        padding: '16px 24px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        background: 'linear-gradient(to bottom, rgba(15,23,42,0.8), transparent)',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        zIndex: 10
+      }}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '8px',
+            background: 'linear-gradient(to tr, #3b82f6, #06b6d4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.95rem',
+            fontWeight: 800
+          }}>F</div>
+          <div style={{fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em'}}>Fiesta Comments</div>
+        </div>
+        
+        <div style={{display: 'flex', gap: '8px'}}>
+          {/* Back Home Button */}
+          <Link href="/" style={{
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            padding: '6px',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#cbd5e1'
+          }}>
+            <Home size={16} />
+          </Link>
+          
+          <div style={{
+            backgroundColor: 'rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            padding: '4px 12px',
+            borderRadius: '16px',
+            fontSize: '0.75rem',
+            fontWeight: 'bold',
+            color: '#cbd5e1',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
+            {leads.length > 0 ? `${leads.length} pending` : 'Inbox Clean'}
+          </div>
+        </div>
+      </div>
+
+      {/* Swipe Card */}
+      <div 
+        style={cardStyle}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
+        {/* Approve/Reject Stamps */}
+        {swipeOffset > 0 && <div style={stampStyle('like')}>Approve</div>}
+        {swipeOffset < 0 && <div style={stampStyle('nope')}>Reject</div>}
+
+        {loading ? (
+          <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94a3b8'}}>
+            <Loader size={32} style={{marginBottom: '12px', animation: 'spinSlow 1.5s linear infinite'}} />
+            <p style={{fontSize: '0.85rem'}}>Fetching pending posts...</p>
+          </div>
+        ) : currentLead ? (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            padding: '28px 24px',
+            position: 'relative'
+          }}>
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 12px',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                color: '#60a5fa',
+                borderRadius: '9999px',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                marginBottom: '18px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              }}>
+                <Sparkles size={12} />
+                {getGroupName(currentLead.group_url)}
+              </div>
+              
+              <div style={{
+                fontSize: '1.15rem',
+                lineHeight: '1.65',
+                color: '#e2e8f0',
+                fontWeight: 500,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              }}>
+                {currentLead.post_text}
+              </div>
+            </div>
+
+            {/* Bottom Card Bar */}
+            <div style={{
+              marginTop: '16px',
+              paddingTop: '16px',
+              borderTop: '1px solid rgba(255,255,255,0.06)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px'
+            }}>
+              <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
+                CRITICAL CHECK: Posting ONLY the Master 200% Guarantee Template
+              </span>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                Swipe right to Approve • Swipe left to Reject
+              </span>
+            </div>
           </div>
         ) : (
-          <div className="relative w-full max-w-sm h-[60vh]">
-            {leads.map((lead, index) => {
-              const isTop = index === 0;
-              return (
-                <motion.div
-                  key={lead.id}
-                  drag={isTop ? "x" : false}
-                  dragConstraints={{ left: 0, right: 0 }}
-                  onDragEnd={(e, info) => isTop && handleDragEnd(e, info, lead.id)}
-                  animate={isTop ? controls : { scale: 0.95, opacity: 0.5, y: 20 }}
-                  initial={{ scale: 0.95, opacity: 0, y: 20 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                  className={`absolute inset-0 bg-gray-900 border border-gray-800 rounded-3xl p-6 shadow-2xl flex flex-col justify-between ${isTop ? 'z-10 cursor-grab active:cursor-grabbing' : 'z-0'}`}
-                >
-                  <div className="flex-1 overflow-y-auto">
-                    <div className="inline-block px-3 py-1 bg-blue-500/20 text-blue-400 rounded-full text-xs font-semibold mb-4 truncate max-w-full">
-                      {lead.group_url.replace('https://www.facebook.com/groups/', '').split('/')[0]}
-                    </div>
-                    <p className="text-lg leading-relaxed text-gray-200">
-                      {lead.post_text}
-                    </p>
-                  </div>
-                  
-                  {isTop && (
-                    <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-800">
-                      <button 
-                        onClick={() => handleRejectPrompt(lead.id)}
-                        className="w-14 h-14 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center border border-red-500/20 hover:bg-red-500/20 transition-colors"
-                      >
-                        <X size={28} strokeWidth={2.5} />
-                      </button>
-                      <button 
-                        onClick={() => handleApprove(lead.id)}
-                        className="w-14 h-14 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center border border-green-500/20 hover:bg-green-500/20 transition-colors"
-                      >
-                        <Check size={28} strokeWidth={2.5} />
-                      </button>
-                    </div>
-                  )}
-                </motion.div>
-              );
-            })}
+          <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', padding: '32px'}}>
+            <div style={{fontSize: '3.5rem', marginBottom: '16px'}}>🏡✨</div>
+            <h2 style={{fontSize: '1.5rem', fontWeight: 800, marginBottom: '8px', color: '#f8fafc'}}>All Cleaned Up!</h2>
+            <p style={{color: '#94a3b8', fontSize: '0.9rem', lineHeight: '1.5', maxWidth: '280px'}}>
+              You're caught up. New Facebook posts matching your keywords will appear here automatically.
+            </p>
           </div>
         )}
-      </main>
+      </div>
 
-      {/* Reject Modal */}
-      {showRejectModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <motion.div 
-            initial={{ opacity: 0, y: 100 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-gray-900 border border-gray-800 p-6 rounded-3xl w-full max-w-md shadow-2xl"
+      {/* Button Controls */}
+      {currentLead && !showFeedback && !loading && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: '24px',
+          marginTop: '28px',
+          zIndex: 10
+        }}>
+          {/* Reject Button */}
+          <button 
+            onClick={handleReject}
+            style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              border: '2px solid rgba(239, 68, 68, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 8px 24px rgba(239,68,68,0.15)',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              color: '#f87171'
+            }}
           >
-            <h3 className="text-xl font-bold mb-2">Why reject this post?</h3>
-            <p className="text-sm text-gray-400 mb-4">Your feedback helps train the AI to find better leads.</p>
-            
-            <textarea
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="e.g. They want a car cleaner, not a house cleaner."
-              className="w-full h-32 bg-gray-950 border border-gray-800 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 transition-colors mb-4 resize-none"
-              autoFocus
-            />
-            
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setShowRejectModal(false)}
-                className="flex-1 py-3 rounded-xl bg-gray-800 text-white font-medium hover:bg-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={confirmReject}
-                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-red-500 to-red-600 text-white font-medium hover:from-red-600 hover:to-red-700 transition-colors"
-              >
-                Submit & Reject
-              </button>
+            <X size={28} strokeWidth={2.5} />
+          </button>
+          
+          {/* Approve Button */}
+          <button 
+            onClick={handleApprove}
+            style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+              border: '2px solid rgba(16, 185, 129, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 8px 24px rgba(16,185,129,0.15)',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              color: '#34d399'
+            }}
+          >
+            <Check size={28} strokeWidth={3} />
+          </button>
+        </div>
+      )}
+
+      {/* Slide up feedback panel */}
+      {currentLead && showFeedback && (
+        <div 
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            width: '100%',
+            height: '50%',
+            backgroundColor: '#0f172a',
+            borderTopLeftRadius: '32px',
+            borderTopRightRadius: '32px',
+            borderTop: '1px solid rgba(255,255,255,0.1)',
+            padding: '24px',
+            boxShadow: '0 -15px 40px rgba(0,0,0,0.5)',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 99999,
+            animation: 'slideUpSheet 0.3s ease-out forwards'
+          }}
+        >
+          <div style={{
+            width: '36px',
+            height: '4px',
+            backgroundColor: 'rgba(255,255,255,0.2)',
+            borderRadius: '2px',
+            alignSelf: 'center',
+            marginBottom: '16px'
+          }} />
+          
+          <h3 style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '1.15rem', fontWeight: 800, color: '#f8fafc'}}>
+            <MessageSquare size={20} color="#60a5fa"/> Train AI Memory
+          </h3>
+          
+          <p style={{fontSize: '0.8rem', color: '#94a3b8', marginBottom: '16px'}}>
+            Tell the bot why this post was rejected (e.g. "Looking for carpet cleaner, we only do house cleans"). The AI uses this feedback to filter similar posts in the future.
+          </p>
+          
+          <textarea 
+            value={feedbackText}
+            onChange={(e) => { setFeedbackText(e.target.value); setFeedbackError(false); }}
+            placeholder="e.g. They are asking for commercial cleaners or a different state outside Gold Coast..."
+            style={{
+              flex: 1,
+              backgroundColor: '#020617',
+              border: feedbackError ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '16px',
+              padding: '14px',
+              color: 'white',
+              fontSize: '0.95rem',
+              resize: 'none',
+              marginBottom: '16px',
+              fontFamily: 'inherit',
+              outline: 'none',
+              boxShadow: feedbackError ? '0 0 0 2px rgba(239,68,68,0.2)' : 'none'
+            }}
+          />
+          
+          {feedbackError && (
+            <div style={{
+              color: '#f87171',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              marginTop: '-12px',
+              marginBottom: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}>
+              <AlertCircle size={14} /> Rejection feedback is required to train the bot.
             </div>
-          </motion.div>
+          )}
+          
+          <div style={{display: 'flex', gap: '12px'}}>
+            <button 
+              onClick={() => setShowFeedback(false)}
+              style={{
+                flex: 1,
+                backgroundColor: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                color: '#cbd5e1',
+                padding: '14px',
+                borderRadius: '14px',
+                fontSize: '0.95rem',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={submitFeedback}
+              style={{
+                flex: 1,
+                backgroundColor: '#ef4444',
+                color: 'white',
+                border: 'none',
+                padding: '14px',
+                borderRadius: '14px',
+                fontSize: '0.95rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(239,68,68,0.2)'
+              }}
+            >
+              Train & Reject
+            </button>
+          </div>
         </div>
       )}
     </div>

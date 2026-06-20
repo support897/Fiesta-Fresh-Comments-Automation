@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Sparkles, Activity, MessageSquare, Layers, Power, Save, ChevronRight, Check } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import SwipePage from "./swipe/page";
 
 type StatItem = {
   label: string;
@@ -19,6 +20,10 @@ type ActivityItem = {
 };
 
 export default function Dashboard() {
+  if (process.env.NEXT_PUBLIC_IS_MOBILE_APP === "true") {
+    return <SwipePage />;
+  }
+
   const [isBotActive, setIsBotActive] = useState(false);
   const [template, setTemplate] = useState("");
   const [stats, setStats] = useState({ total: 0, pending: 0, approved: 0, posted: 0, groups: 0 });
