@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Check, MessageSquare, Loader, Sparkles, AlertCircle, Info, RefreshCw, Home } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase, isConfigured } from '@/lib/supabaseClient';
 import Link from 'next/link';
 
 type Lead = {
@@ -20,6 +20,7 @@ export default function SwipePage() {
   const [feedbackText, setFeedbackText] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [feedbackError, setFeedbackError] = useState(false);
+  const [isClient, setIsClient] = useState(false);
   
   // Custom Toast state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
@@ -40,8 +41,9 @@ export default function SwipePage() {
   const fetchLeads = async () => {
     if (isSyncing) return;
     try {
-      if (!supabase) {
-        console.warn("Supabase client is not initialized.");
+      if (!isConfigured) {
+        console.warn("Supabase client is not fully configured (missing env variables).");
+        setLoading(false);
         return;
       }
       const { data, error } = await supabase
@@ -63,10 +65,13 @@ export default function SwipePage() {
   };
 
   useEffect(() => {
+    setIsClient(true);
     fetchLeads();
     const interval = setInterval(fetchLeads, 6000);
     return () => clearInterval(interval);
   }, []);
+
+  if (!isClient) return null; // Avoid hydration mismatch
 
   const currentLead = leads[0]; // Active lead to review
 
