@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Sparkles, Activity, MessageSquare, Layers, Power, Save, ChevronRight, Check } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
 type StatItem = {
   label: string;
@@ -25,6 +26,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [configId, setConfigId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDashboardData();
@@ -32,13 +34,44 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const res = await fetch("/api/stats");
-      const data = await res.json();
-      if (data.success) {
-        setStats(data.stats);
-        setTemplate(data.template);
-        setIsBotActive(data.botActive);
-        setRecentActivity(data.recentActivity || []);
+      // 1. Get Config
+      const { data: config } = await supabase.from('config').select('*').single();
+      if (config) {
+        setIsBotActive(!!config.bot_status);
+        setConfigId(config.id);
+      }
+
+      // 2. Get Template
+      const { data: templateData } = await supabase.from('templates').select('*').eq('is_active', true).single();
+      if (templateData) {
+        setTemplate(templateData.content);
+      }
+
+      // 3. Get Stats counts
+      const { count: total } = await supabase.from('leads').select('*', { count: 'exact', head: true });
+      const { count: pending } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'pending');
+      const { count: approved } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'approved');
+      const { count: posted } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'posted');
+      const { count: groups } = await supabase.from('groups').select('*', { count: 'exact', head: true }).eq('is_active', true);
+
+      setStats({
+        total: total || 0,
+        pending: pending || 0,
+        approved: approved || 0,
+        posted: posted || 0,
+        groups: groups || 0
+      });
+
+      // 4. Get Recent Activity
+      const { data: recent } = await supabase
+        .from('leads')
+        .select('group_url, post_text, updated_at')
+        .eq('status', 'posted')
+        .order('updated_at', { ascending: false })
+        .limit(5);
+
+      if (recent) {
+        setRecentActivity(recent as ActivityItem[]);
       }
     } catch (e) {
       console.error("Error loading dashboard stats:", e);
@@ -51,11 +84,9 @@ export default function Dashboard() {
     const nextStatus = !isBotActive;
     setIsBotActive(nextStatus);
     try {
-      await fetch("/api/stats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botStatus: nextStatus })
-      });
+      if (configId) {
+        await supabase.from('config').update({ bot_status: nextStatus }).eq('id', configId);
+      }
     } catch (e) {
       console.error("Failed to toggle bot status:", e);
       setIsBotActive(!nextStatus); // Revert UI
@@ -65,13 +96,8 @@ export default function Dashboard() {
   const handleSaveTemplate = async () => {
     setSavingTemplate(true);
     try {
-      const res = await fetch("/api/stats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template })
-      });
-      const data = await res.json();
-      if (data.success) {
+      const { error } = await supabase.from('templates').update({ content: template }).eq('is_active', true);
+      if (!error) {
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
       }

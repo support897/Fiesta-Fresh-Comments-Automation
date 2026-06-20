@@ -1,30 +1,22 @@
 import { chromium } from 'playwright-extra';
 // @ts-ignore
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import { pipeline, cos_sim } from '@xenova/transformers';
-import {
-    getConfig,
-    getActiveTemplate,
-    getApprovedLeads,
-    updateLeadStatus,
-    getActiveGroups,
-    getKeywords,
-    checkExistingReply,
-    insertLead,
-    getAiMemoryRules,
-    upsertSession
-} from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 chromium.use(stealthPlugin());
 
@@ -39,19 +31,25 @@ async function humanType(page: any, selector: string, text: string) {
 }
 
 /**
- * Capture and save screenshot locally
+ * Capture and upload screenshot to Supabase Storage
  */
 async function captureProof(page: any, fileName: string) {
     try {
         const screenshot = await page.screenshot({ fullPage: false });
-        const proofsDir = path.join(__dirname, 'proofs');
-        if (!fs.existsSync(proofsDir)) {
-            fs.mkdirSync(proofsDir, { recursive: true });
+        const filePath = `proofs/${Date.now()}_${fileName}.png`;
+        
+        const { data, error } = await supabase.storage
+            .from('bot-screenshots')
+            .upload(filePath, screenshot, { contentType: 'image/png' });
+
+        if (error) {
+            console.error("📸 Upload failed:", error.message);
+            return null;
         }
-        const filePath = path.join(proofsDir, `${Date.now()}_${fileName}.png`);
-        fs.writeFileSync(filePath, screenshot);
-        console.log(`📸 Proof captured locally: file://${filePath}`);
-        return `file://${filePath}`;
+
+        const { data: { publicUrl } } = supabase.storage.from('bot-screenshots').getPublicUrl(filePath);
+        console.log(`📸 Proof captured: ${publicUrl}`);
+        return publicUrl;
     } catch (e) {
         console.error("Failed to capture screenshot:", e);
         return null;
@@ -81,7 +79,7 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
         const postOutput = await extract(postText, { pooling: 'mean', normalize: true });
         const idealOutput = await extract(idealLead, { pooling: 'mean', normalize: true });
         
-        const similarity = cos_sim(postOutput.data, idealOutput.data);
+        const similarity = cos_sim(Array.from(postOutput.data), Array.from(idealOutput.data));
         console.log(`📊 Semantic Similarity Score: ${(similarity * 100).toFixed(2)}%`);
         
         return similarity > 0.45;
@@ -103,7 +101,7 @@ async function evaluatePostWithAI(postText: string): Promise<boolean> {
     
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const memoryData = await getAiMemoryRules();
+        const { data: memoryData } = await supabase.from('ai_memory').select('rule_text');
         const rules = memoryData?.map((m: any) => `- ${m.rule_text}`).join('\n') || 'No specific rules yet.';
         
         const prompt = `
@@ -137,7 +135,7 @@ async function runBot() {
     const fbPassword = process.env.FB_PASSWORD!;
 
     // 1. Check Config
-    const config = await getConfig();
+    const { data: config } = await supabase.from('config').select('*').single();
     if (!config || !config.bot_status) {
         console.log("⏸️ Bot is paused. Sleeping...");
         return;
@@ -218,8 +216,8 @@ async function runBot() {
 
             // SAVE SESSION
             const cookies = await context.cookies();
-            await upsertSession(fbEmail, cookies);
-            console.log("💾 Session updated in local database.");
+            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
+            console.log("💾 Session updated in Supabase.");
         }
 
         // --- FINAL IDENTITY VERIFICATION ---
@@ -227,16 +225,16 @@ async function runBot() {
         if (!isLogged) {
             console.error("❌ Final Identity Check Failed.");
             const errorPath = await captureProof(page, 'identity_verify_failed');
-            console.log(`📸 Diagnostic Screenshot saved to: ${errorPath}`);
+            console.log(`📸 Diagnostic Screenshot: ${errorPath}`);
             await context.close();
             return;
         }
 
         console.log("👤 Identity verified. Starting execution phase...");
         
-        const approvedLeads = await getApprovedLeads();
-        const activeTemplate = await getActiveTemplate();
-        const templateText = activeTemplate?.content || `Hi! 💙 We would absolutely love to help you out!
+        const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
+        const templateText = templates?.content || `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
 
@@ -275,7 +273,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await page.keyboard.press('Enter');
                                 await page.waitForTimeout(2000);
                                 
-                                await updateLeadStatus(lead.id, 'posted');
+                                await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
                                 console.log("✅ Successfully posted and marked as posted.");
                                 found = true;
                                 break;
@@ -289,78 +287,79 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
         console.log("👤 Starting group patrol (Scraping)...");
 
-        const groups = await getActiveGroups();
+        const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
 
-        for (const group of groups) {
-            console.log(`\n🔍 Scanning: ${group.url}`);
-            await page.goto(group.url, { waitUntil: 'networkidle' });
-            await page.waitForTimeout(2000);
-
-            // BYPASS BUY/SELL LAYOUT
-            const discussionTab = page.locator('span:has-text("Discussion")');
-            if (await discussionTab.isVisible()) {
-                console.log("📂 Buy/Sell layout detected. Switching to Discussion...");
-                await discussionTab.click();
+        if (groups) {
+            for (const group of groups) {
+                console.log(`\n🔍 Scanning: ${group.url}`);
+                await page.goto(group.url, { waitUntil: 'networkidle' });
                 await page.waitForTimeout(2000);
-            }
 
-            // SIMULATE HUMAN BROWSING
-            await page.mouse.wheel(0, 800);
-            await page.waitForTimeout(3000);
+                // BYPASS BUY/SELL LAYOUT
+                const discussionTab = page.locator('span:has-text("Discussion")');
+                if (await discussionTab.isVisible()) {
+                    console.log("📂 Buy/Sell layout detected. Switching to Discussion...");
+                    await discussionTab.click();
+                    await page.waitForTimeout(2000);
+                }
 
-            // 1. Wait for posts to load
-            await page.waitForSelector('[role="article"]', { timeout: 10000 }).catch(() => null);
-            
-            const posts = page.locator('[role="article"]');
-            const postCount = await posts.count();
-            console.log(`📡 Found ${postCount} posts in the visible area.`);
+                // SIMULATE HUMAN BROWSING
+                await page.mouse.wheel(0, 800);
+                await page.waitForTimeout(3000);
 
-            // LOCAL TRACKER for this run
-            const localRepliedIds = new Set();
-
-            for (let i = 0; i < Math.min(postCount, 5); i++) {
-                const post = posts.nth(i);
-                const postText = (await post.innerText()).trim();
+                // 1. Wait for posts to load
+                await page.waitForSelector('[role="article"]', { timeout: 10000 }).catch(() => null);
                 
-                const textHash = postText.substring(0, 100).replace(/\s/g, '_');
-                const postID = `hash_${textHash}`;
+                const posts = page.locator('[role="article"]');
+                const postCount = await posts.count();
+                console.log(`📡 Found ${postCount} posts in the visible area.`);
 
-                // --- NEW: 100% AI FILTER ---
-                const isLead = await evaluatePostWithAI(postText);
-                
-                if (isLead) {
-                    console.log(`🎯 AI MATCH FOUND for post ID: ${postID}`);
+                // LOCAL TRACKER for this run
+                const localRepliedIds = new Set();
 
-                    // 2. CHECK LOCAL & REMOTE DEDUPLICATION
-                    if (localRepliedIds.has(postID)) {
-                        console.log("⏭️ Already replied in this session. Skipping.");
-                        continue;
-                    }
+                for (let i = 0; i < Math.min(postCount, 5); i++) {
+                    const post = posts.nth(i);
+                    const postText = (await post.innerText()).trim();
+                    
+                    const textHash = postText.substring(0, 100).replace(/\s/g, '_');
+                    const postID = `hash_${textHash}`;
 
-                    const existing = await checkExistingReply(postID);
-                    if (existing) {
-                        console.log("⏭️ Already logged in DB. Skipping.");
-                        continue;
-                    }
+                    // --- NEW: 100% AI FILTER ---
+                    const isLead = await evaluatePostWithAI(postText);
+                    
+                    if (isLead) {
+                        console.log(`🎯 AI MATCH FOUND for post ID: ${postID}`);
 
-                    console.log("✍️ Preparing to queue lead...");
+                        // 2. CHECK LOCAL & REMOTE DEDUPLICATION
+                        if (localRepliedIds.has(postID)) {
+                            console.log("⏭️ Already replied in this session. Skipping.");
+                            continue;
+                        }
 
-                    try {
-                        // Insert to leads table instead of posting directly
-                        await insertLead({
+                        const { data: existing } = await supabase.from('replies_log').select('*').eq('post_id', postID).single();
+                        if (existing) {
+                            console.log("⏭️ Already logged in DB. Skipping.");
+                            continue;
+                        }
+
+                        console.log("✍️ Preparing to queue lead...");
+
+                        const { error: insertError } = await supabase.from('leads').insert({
                             post_id: postID,
                             group_url: group.url,
                             post_text: postText,
                             status: 'pending' // Send to human for review via Swipe UI
                         });
-                        console.log("✅ Lead queued for review in Swipe UI.");
-                        localRepliedIds.add(postID); // Block in local memory
-                    } catch (e: any) {
-                        // Lead might already be present in SQLite due to a UNIQUE constraint
-                        if (e.message?.includes('UNIQUE')) {
-                            console.log("⏭️ Lead already exists in SQLite. Skipping.");
+
+                        if (insertError) {
+                            if (insertError.message?.includes('duplicate')) {
+                                console.log("⏭️ Lead already exists in Supabase. Skipping.");
+                            } else {
+                                console.error("❌ Failed to queue lead:", insertError.message);
+                            }
                         } else {
-                            console.error("❌ Failed to queue lead:", e.message || e);
+                            console.log("✅ Lead queued for review in Swipe UI.");
+                            localRepliedIds.add(postID); // Block in local memory
                         }
                     }
                 }

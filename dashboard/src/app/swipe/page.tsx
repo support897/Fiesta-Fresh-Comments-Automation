@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, useAnimation, PanInfo } from 'framer-motion';
-import { Check, X, ChevronLeft, Loader2 } from 'lucide-react';
+import { Check, X, Loader2 } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
 
 type Lead = {
   id: string;
@@ -28,10 +29,14 @@ export default function SwipePage() {
   const fetchLeads = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/leads');
-      const json = await response.json();
-      if (json.success && json.data) {
-        setLeads(json.data);
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+
+      if (data) {
+        setLeads(data);
       }
     } catch (e) {
       console.error("Failed to fetch leads:", e);
@@ -41,11 +46,7 @@ export default function SwipePage() {
 
   const handleApprove = async (id: string) => {
     try {
-      await fetch('/api/leads/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, action: 'approve' })
-      });
+      await supabase.from('leads').update({ status: 'approved' }).eq('id', id);
       setLeads((prev) => prev.filter((l) => l.id !== id));
     } catch (e) {
       console.error("Failed to approve lead:", e);
@@ -61,15 +62,19 @@ export default function SwipePage() {
     if (!activeLeadId) return;
     
     try {
-      await fetch('/api/leads/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          id: activeLeadId, 
-          action: 'reject', 
-          reason: rejectReason 
-        })
-      });
+      // 1. Update lead status in Supabase
+      await supabase.from('leads').update({ 
+        status: 'rejected', 
+        rejection_reason: rejectReason 
+      }).eq('id', activeLeadId);
+
+      // 2. Log feedback into AI memory for training
+      if (rejectReason.trim()) {
+        await supabase.from('ai_memory').insert({
+          rule_text: rejectReason
+        });
+      }
+
       setLeads((prev) => prev.filter((l) => l.id !== activeLeadId));
     } catch (e) {
       console.error("Failed to reject lead:", e);
@@ -109,7 +114,7 @@ export default function SwipePage() {
       <header className="p-4 flex items-center justify-between border-b border-gray-800 bg-gray-900/50 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center font-bold">F</div>
-          <h1 className="text-xl font-semibold tracking-tight">Fiesta Swipe</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Fiesta Swipe Deck</h1>
         </div>
         <span className="text-sm text-gray-400">{leads.length} Pending</span>
       </header>
@@ -137,7 +142,7 @@ export default function SwipePage() {
                 >
                   <div className="flex-1 overflow-y-auto">
                     <div className="inline-block px-3 py-1 bg-blue-500/20 text-blue-400 rounded-full text-xs font-semibold mb-4 truncate max-w-full">
-                      {lead.group_url.replace('https://www.facebook.com/groups/', '')}
+                      {lead.group_url.replace('https://www.facebook.com/groups/', '').split('/')[0]}
                     </div>
                     <p className="text-lg leading-relaxed text-gray-200">
                       {lead.post_text}

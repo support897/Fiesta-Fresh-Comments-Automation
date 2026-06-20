@@ -1,16 +1,20 @@
 import { chromium } from 'playwright-extra';
 // @ts-ignore
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { upsertSession } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 chromium.use(stealthPlugin());
 
@@ -63,8 +67,8 @@ async function run() {
         if (isHomeVisible) {
             console.log("🎉 Login detected! Capturing cookies...");
             const cookies = await context.cookies();
-            await upsertSession(fbEmail, cookies);
-            console.log("🎉 Successfully saved refreshed cookies to local SQLite database!");
+            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
+            console.log("🎉 Successfully saved refreshed cookies to Supabase!");
             loggedIn = true;
             break;
         }
@@ -74,7 +78,7 @@ async function run() {
         console.log("⚠️ Timeout waiting for login detection. Saving cookies anyway...");
         try {
             const cookies = await context.cookies();
-            await upsertSession(fbEmail, cookies);
+            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
             console.log("💾 Cookies saved.");
         } catch (e) {
             console.error("❌ Failed to save cookies:", e);
