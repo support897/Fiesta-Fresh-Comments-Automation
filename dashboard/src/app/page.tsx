@@ -118,7 +118,7 @@ export default function Dashboard() {
     return (
       <div style={{
         minHeight: '100vh',
-        background: '#090b11',
+        background: 'var(--background)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -128,8 +128,8 @@ export default function Dashboard() {
         <div style={{
           width: '48px',
           height: '48px',
-          border: '3px solid rgba(59, 130, 246, 0.2)',
-          borderTop: '3px solid #3b82f6',
+          border: '3px solid rgba(13, 92, 145, 0.2)',
+          borderTop: '3px solid #0d5c91',
           borderRadius: '50%',
           animation: 'spin 1s linear infinite'
         }} />
@@ -144,10 +144,10 @@ export default function Dashboard() {
   return (
     <div style={{
       minHeight: '100vh',
-      background: '#090b11',
-      color: 'white',
+      background: 'var(--background)',
+      color: '#000000',
       padding: '32px 24px 80px 24px',
-      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontFamily: 'var(--font-sans), system-ui, sans-serif',
       position: 'relative',
       overflow: 'hidden'
     }}>
@@ -157,12 +157,7 @@ export default function Dashboard() {
       }}>
         <div style={{
           position: 'absolute', top: '-15%', left: '-10%', width: '50%', height: '50%',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)',
-          filter: 'blur(80px)'
-        }} />
-        <div style={{
-          position: 'absolute', bottom: '-15%', right: '-10%', width: '50%', height: '50%',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(20,184,166,0.06) 0%, transparent 70%)',
+          borderRadius: '50%', background: 'radial-gradient(circle, rgba(13,92,145,0.05) 0%, transparent 70%)',
           filter: 'blur(80px)'
         }} />
       </div>
@@ -176,23 +171,21 @@ export default function Dashboard() {
         }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-              <div style={{
-                width: '36px', height: '36px', borderRadius: '10px',
-                background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '1.1rem', fontWeight: 800, color: 'white',
-                boxShadow: '0 4px 16px rgba(59,130,246,0.3)'
-              }}>F</div>
+              <img 
+                src="https://www.fiestafreshcleaning.com/assets/logo-CpH5fHWq.jpeg" 
+                alt="Fiesta Fresh Logo" 
+                style={{ width: '36px', height: '36px', borderRadius: '10px', objectFit: 'contain', border: '1px solid rgba(0,0,0,0.05)' }}
+              />
               <span style={{
                 fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase',
-                color: '#60a5fa', background: 'rgba(59,130,246,0.1)', padding: '4px 12px',
-                borderRadius: '20px', border: '1px solid rgba(59,130,246,0.2)'
+                color: '#0d5c91', background: 'rgba(13,92,145,0.05)', padding: '4px 12px',
+                borderRadius: '20px', border: '1px solid rgba(13,92,145,0.1)'
               }}>Automation Engine</span>
             </div>
             <h1 style={{
               fontSize: 'clamp(1.8rem, 4vw, 2.5rem)', fontWeight: 800, letterSpacing: '-0.03em',
-              background: 'linear-gradient(135deg, #60a5fa, #38bdf8, #2dd4bf)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              color: '#0d5c91',
+              fontFamily: 'var(--font-display), serif',
               lineHeight: 1.2
             }}>
               Fiesta Fresh Cleaning
