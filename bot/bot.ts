@@ -22,6 +22,40 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const DRY_RUN = process.env.DRY_RUN === 'true';
 const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '60') * 1000;
 
+// --- Account Configuration ---
+// FB_ACCOUNTS = JSON array of {email, password} for multi-account rotation
+// Falls back to FB_EMAIL/FB_PASSWORD for backward compatibility
+interface FbAccount { email: string; password: string; }
+
+function loadAccounts(): FbAccount[] {
+    const raw = process.env.FB_ACCOUNTS;
+    if (raw) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed.filter((a: any) => a.email && a.password);
+            }
+        } catch (e) {
+            console.error("⚠️ Invalid FB_ACCOUNTS JSON, falling back to FB_EMAIL/FB_PASSWORD.");
+        }
+    }
+    const single: FbAccount[] = [];
+    if (process.env.FB_EMAIL && process.env.FB_PASSWORD) {
+        single.push({ email: process.env.FB_EMAIL!, password: process.env.FB_PASSWORD! });
+    }
+    return single;
+}
+
+const ACCOUNTS = loadAccounts();
+let currentAccountIndex = 0;
+
+function nextAccount(): FbAccount | null {
+    if (ACCOUNTS.length === 0) return null;
+    const account = ACCOUNTS[currentAccountIndex % ACCOUNTS.length];
+    currentAccountIndex++;
+    return account ?? null;
+}
+
 chromium.use(stealthPlugin());
 
 // --- Utility Functions ---
@@ -276,8 +310,14 @@ async function runBot() {
     console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
     
-    const fbEmail = process.env.FB_EMAIL!;
-    const fbPassword = process.env.FB_PASSWORD!;
+    const account = nextAccount();
+    if (!account) {
+        console.error("❌ No Facebook accounts configured. Set FB_ACCOUNTS or FB_EMAIL/FB_PASSWORD.");
+        return;
+    }
+    const fbEmail = account.email;
+    const fbPassword = account.password;
+    console.log(`👤 Account: ${fbEmail}`);
 
     // 1. Check Config
     const { data: config } = await supabase.from('config').select('*').single();
