@@ -8,3 +8,5 @@ FiestaSession/
 proofs/
 test_sqlite_write.ts
 test_db.ts
+deploy-vercel.sh
+deploy-render.sh

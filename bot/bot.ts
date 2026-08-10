@@ -4,6 +4,7 @@ import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import path from 'path';
+import http from 'http';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import { pipeline, cos_sim } from '@xenova/transformers';
@@ -518,18 +519,52 @@ We will also send you a DM just in case you have any questions. Make sure to che
 }
 
 // **MAIN LOOP - Run continuously**
+let lastCycleTime = 'never';
+let cycleCount = 0;
+let isRunning = false;
+
 async function main() {
     console.log("🚀 Fiesta Fresh Bot v2.0 Starting...");
     console.log(`Supabase: ${supabaseUrl}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
-    
-    // Run immediately on start
-    await runBot().catch(err => console.error("Bot cycle failed:", err));
-    
-    // Then run on interval
-    setInterval(async () => {
+
+    // Health check server (required for Render to keep the service alive)
+    const PORT = parseInt(process.env.PORT || '8080');
+    http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            status: 'ok',
+            mode: DRY_RUN ? 'dry_run' : 'live',
+            cycles: cycleCount,
+            lastCycle: lastCycleTime,
+            running: isRunning
+        }));
+    }).listen(PORT, () => {
+        console.log(`❤️ Health check server listening on port ${PORT}`);
+    });
+
+    const cycle = async () => {
+        if (isRunning) {
+            console.log("⏳ Previous cycle still running, skipping this tick.");
+            return;
+        }
+        isRunning = true;
+        try {
+            await runBot();
+        } catch (err) {
+            console.error("Bot cycle failed:", err);
+        } finally {
+            isRunning = false;
+            cycleCount++;
+            lastCycleTime = new Date().toISOString();
+        }
+    };
+
+    // Run immediately, then on interval
+    await cycle();
+    setInterval(() => {
         console.log("\n⏰ Starting new scan cycle...");
-        await runBot().catch(err => console.error("Bot cycle failed:", err));
+        cycle();
     }, SCAN_INTERVAL);
 }
 
