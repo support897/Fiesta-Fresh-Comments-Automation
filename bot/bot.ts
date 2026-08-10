@@ -18,16 +18,133 @@ const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const DRY_RUN = process.env.DRY_RUN === 'true';
+const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '60') * 1000;
+
 chromium.use(stealthPlugin());
 
+// Keyword quick filters (instant approval/rejection - no AI cost)
+const APPROVE_KEYWORDS = [
+    'cleaner', 'cleaning', 'clean', 'bond clean', 'end of lease', 
+    'deep clean', 'house clean', 'home clean', 'maid', 'domestic',
+    'spring clean', 'move out', 'vacate', 'carpet clean', 'window clean',
+    'price', 'cost', 'how much', 'quote', 'rate', 'recommend', 'recommendation'
+];
+
+const REJECT_KEYWORDS = [
+    'car wash', 'car clean', 'vehicle', 'mobile detailing',
+    'commercial', 'office clean', 'warehouse', 'factory',
+    'pool clean', 'gutter', 'lawn', 'garden', 'landscaping',
+    'plumber', 'electrician', 'handyman', 'painter', 'removalist'
+];
+
 /**
- * Human-like typing
+ * Random delay for human-like behavior
+ */
+async function randomDelay(min: number = 500, max: number = 2000) {
+    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+    await new Promise(resolve => setTimeout(resolve, delay));
+}
+
+/**
+ * Human-like typing with random speed
  */
 async function humanType(page: any, selector: string, text: string) {
     await page.click(selector);
+    await randomDelay(300, 800);
+    
     for (const char of text) {
-        await page.type(selector, char, { delay: Math.floor(Math.random() * 100) + 45 });
+        const typingSpeed = Math.floor(Math.random() * 100) + 45; // 45-145ms per char
+        await page.type(selector, char, { delay: typingSpeed });
     }
+}
+
+/**
+ * Close overlays and popups
+ */
+async function closeOverlays(page: any) {
+    const overlaySelectors = [
+        'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
+        'button:has-text("Allow all cookies")',
+        'button:has-text("Allow essential and optional cookies")',
+        'div[aria-label="Allow all cookies"]',
+        '[aria-label="Allow all cookies"]',
+        '[aria-label="Close"]',
+        'button[aria-label="Close"]',
+        'div[role="dialog"] button:has-text("Close")',
+        'div[role="dialog"] button:has-text("Not Now")',
+    ];
+    
+    for (const selector of overlaySelectors) {
+        try {
+            const btn = page.locator(selector).first();
+            if (await btn.isVisible({ timeout: 2000 })) {
+                console.log(`🍪 Closing overlay (${selector})`);
+                await btn.click();
+                await randomDelay(1000, 2000);
+            }
+        } catch (e) {
+            // Overlay not found, continue
+        }
+    }
+}
+
+/**
+ * Extract commenter name from post element
+ */
+async function extractCommenterName(postElement: any): Promise<string> {
+    try {
+        // Try multiple selectors for name extraction
+        const nameSelectors = [
+            'h4', 
+            'strong a', 
+            'a[role="link"] span',
+            '[data-ad-preview="message"] strong'
+        ];
+        
+        for (const selector of nameSelectors) {
+            try {
+                const nameEl = postElement.locator(selector).first();
+                if (await nameEl.isVisible({ timeout: 1000 })) {
+                    const name = await nameEl.innerText();
+                    if (name && name.length > 0 && name.length < 50) {
+                        return name.trim().split(' ')[0]; // First name only
+                    }
+                }
+            } catch (e) {
+                continue;
+            }
+        }
+    } catch (e) {
+        console.log("⚠️ Could not extract commenter name");
+    }
+    return 'there'; // Fallback
+}
+
+/**
+ * Keyword-based quick filter (saves AI costs)
+ */
+function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
+    const lowerText = postText.toLowerCase();
+    
+    // Check reject keywords first (high priority)
+    for (const keyword of REJECT_KEYWORDS) {
+        if (lowerText.includes(keyword.toLowerCase())) {
+            console.log(`❌ Quick REJECT - keyword: "${keyword}"`);
+            return 'reject';
+        }
+    }
+    
+    // Check approve keywords
+    for (const keyword of APPROVE_KEYWORDS) {
+        if (lowerText.includes(keyword.toLowerCase())) {
+            console.log(`✅ Quick APPROVE - keyword: "${keyword}"`);
+            return 'approve';
+        }
+    }
+    
+    console.log("🤔 Unsure - sending to AI evaluation");
+    return 'unsure';
 }
 
 /**
@@ -85,7 +202,6 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
         return similarity > 0.45;
     } catch (e) {
         console.error("❌ Semantic search failed:", e);
-        // Absolute last resort: keyword fallback
         return postText.toLowerCase().includes('clean');
     }
 }
@@ -130,6 +246,8 @@ async function evaluatePostWithAI(postText: string): Promise<boolean> {
 
 async function runBot() {
     console.log("🤖 Starting Fiesta Fresh Automation Bot...");
+    console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
+    console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
     
     const fbEmail = process.env.FB_EMAIL!;
     const fbPassword = process.env.FB_PASSWORD!;
@@ -137,7 +255,7 @@ async function runBot() {
     // 1. Check Config
     const { data: config } = await supabase.from('config').select('*').single();
     if (!config || !config.bot_status) {
-        console.log("⏸️ Bot is paused. Sleeping...");
+        console.log("⏸️ Bot is paused in Supabase config. Waiting...");
         return;
     }
 
@@ -151,7 +269,8 @@ async function runBot() {
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-features=IsolateOrigins,site-per-process'
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-gpu'
         ],
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
@@ -175,63 +294,47 @@ async function runBot() {
     const page: any = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
     try {
-        console.log("➡️ Navigated to Facebook. Checking state...");
+        console.log("➡️ Navigating to Facebook...");
         await page.goto('https://www.facebook.com');
-        await page.waitForTimeout(5000);
+        await randomDelay(3000, 5000);
 
-        // --- HANDLE COOKIE CONSENT ---
-        const selectors = [
-            'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
-            'button:has-text("Allow all cookies")',
-            'button:has-text("Allow essential and optional cookies")',
-            'div[aria-label="Allow all cookies"]',
-            '[aria-label="Allow all cookies"]'
-        ];
-        
-        for (const selector of selectors) {
-            const btn = page.locator(selector).first();
-            if (await btn.isVisible()) {
-                console.log(`🍪 Found cookie banner (${selector}). Clicking...`);
-                await btn.click();
-                await page.waitForTimeout(2000);
-                break;
-            }
-        }
+        // Close overlays
+        await closeOverlays(page);
 
-        // --- LOGIN OR HOME CHECK ---
+        // Login check
         const loginMarkers = page.locator('#email, [name="email"], #pass, [name="pass"]');
-        const homeMarkers = page.locator('[aria-label="Your profile"], [aria-label="Facebook"], [aria-label*="Home"], [aria-label="Home"]');
+        const homeMarkers = page.locator('[aria-label="Your profile"], [aria-label="Facebook"], [aria-label*="Home"]');
 
         if (await loginMarkers.first().isVisible()) {
             console.log("🔒 Login screen detected. Logging in...");
             await humanType(page, '#email', fbEmail);
-            await page.waitForTimeout(800 + Math.random() * 500);
+            await randomDelay(800, 1500);
             await humanType(page, '#pass', fbPassword);
-            await page.waitForTimeout(500);
+            await randomDelay(500, 1000);
             await page.click('[name="login"]');
             
             console.log("⏳ Waiting for landing page...");
-            await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA request?"));
-            await page.waitForTimeout(5000);
+            await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA?"));
+            await randomDelay(3000, 5000);
 
-            // SAVE SESSION
+            // Save session
             const cookies = await context.cookies();
             await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
             console.log("💾 Session updated in Supabase.");
         }
 
-        // --- FINAL IDENTITY VERIFICATION ---
+        // Verify login
         const isLogged = await homeMarkers.first().isVisible();
         if (!isLogged) {
-            console.error("❌ Final Identity Check Failed.");
-            const errorPath = await captureProof(page, 'identity_verify_failed');
-            console.log(`📸 Diagnostic Screenshot: ${errorPath}`);
+            console.error("❌ Login verification failed.");
+            await captureProof(page, 'login_failed');
             await context.close();
             return;
         }
 
-        console.log("👤 Identity verified. Starting execution phase...");
+        console.log("👤 Login verified. Starting execution...");
         
+        // PHASE 1: Execute approved leads
         const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
         const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
         const templateText = templates?.content || `Hi! 💙 We would absolutely love to help you out!
@@ -249,14 +352,22 @@ We will also send you a DM just in case you have any questions. Make sure to che
         if (approvedLeads && approvedLeads.length > 0) {
             console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
             for (const lead of approvedLeads) {
-                console.log(`\n🚀 Executing approved lead on group: ${lead.group_url}`);
-                await page.goto(lead.group_url, { waitUntil: 'networkidle' });
-                await page.waitForTimeout(3000);
+                console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
                 
-                // We scroll down searching for the post matching the text
+                if (DRY_RUN) {
+                    console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
+                    console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
+                    await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
+                    continue;
+                }
+                
+                await page.goto(lead.group_url, { waitUntil: 'networkidle' });
+                await randomDelay(2000, 4000);
+                
+                // Scroll to find post
                 for (let scroll = 0; scroll < 5; scroll++) {
                     await page.mouse.wheel(0, 1000);
-                    await page.waitForTimeout(2000);
+                    await randomDelay(1500, 3000);
                     const posts = page.locator('[role="article"]');
                     const count = await posts.count();
                     let found = false;
@@ -264,17 +375,29 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     for (let i = 0; i < count; i++) {
                         const postText = (await posts.nth(i).innerText()).trim();
                         if (postText.includes(lead.post_text.substring(0, 50))) {
-                            console.log("🎯 Found approved post on page! Commenting...");
+                            console.log("🎯 Found approved post! Commenting...");
+                            await closeOverlays(page);
+                            
                             const commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
                             if (await commentBox.isVisible()) {
+                                await randomDelay(1000, 2000);
                                 await commentBox.click();
-                                await page.waitForTimeout(1000);
+                                await randomDelay(800, 1500);
                                 await humanType(page, '[role="textbox"]:focus', templateText);
+                                await randomDelay(500, 1000);
                                 await page.keyboard.press('Enter');
-                                await page.waitForTimeout(2000);
+                                await randomDelay(2000, 3000);
+                                
+                                // **FIX: Write to replies_log for deduplication**
+                                await supabase.from('replies_log').insert({
+                                    post_id: lead.post_id,
+                                    group_url: lead.group_url,
+                                    comment_id: `comment_${Date.now()}`,
+                                    replied_at: new Date()
+                                });
                                 
                                 await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                                console.log("✅ Successfully posted and marked as posted.");
+                                console.log("✅ Comment posted and logged.");
                                 found = true;
                                 break;
                             }
@@ -285,37 +408,34 @@ We will also send you a DM just in case you have any questions. Make sure to che
             }
         }
 
-        console.log("👤 Starting group patrol (Scraping)...");
+        // PHASE 2: Scrape groups for new posts
+        console.log("🔍 Starting group patrol...");
 
         const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
 
         if (groups) {
             for (const group of groups) {
-                console.log(`\n🔍 Scanning: ${group.url}`);
+                console.log(`\n📡 Scanning: ${group.url}`);
                 await page.goto(group.url, { waitUntil: 'networkidle' });
-                await page.waitForTimeout(2000);
+                await randomDelay(2000, 4000);
 
-                // BYPASS BUY/SELL LAYOUT
+                // Switch to Discussion if Buy/Sell layout
                 const discussionTab = page.locator('span:has-text("Discussion")');
                 if (await discussionTab.isVisible()) {
-                    console.log("📂 Buy/Sell layout detected. Switching to Discussion...");
+                    console.log("📂 Switching to Discussion tab...");
                     await discussionTab.click();
-                    await page.waitForTimeout(2000);
+                    await randomDelay(2000, 3000);
                 }
 
-                // SIMULATE HUMAN BROWSING
+                // Human-like browsing
                 await page.mouse.wheel(0, 800);
-                await page.waitForTimeout(3000);
+                await randomDelay(2000, 4000);
 
-                // 1. Wait for posts to load
                 await page.waitForSelector('[role="article"]', { timeout: 10000 }).catch(() => null);
                 
                 const posts = page.locator('[role="article"]');
                 const postCount = await posts.count();
-                console.log(`📡 Found ${postCount} posts in the visible area.`);
-
-                // LOCAL TRACKER for this run
-                const localRepliedIds = new Set();
+                console.log(`📡 Found ${postCount} posts.`);
 
                 for (let i = 0; i < Math.min(postCount, 5); i++) {
                     const post = posts.nth(i);
@@ -324,56 +444,93 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     const textHash = postText.substring(0, 100).replace(/\s/g, '_');
                     const postID = `hash_${textHash}`;
 
-                    // --- NEW: 100% AI FILTER ---
-                    const isLead = await evaluatePostWithAI(postText);
+                    // **Check dedup in replies_log**
+                    const { data: alreadyReplied } = await supabase
+                        .from('replies_log')
+                        .select('*')
+                        .eq('post_id', postID)
+                        .eq('group_url', group.url)
+                        .single();
+                    
+                    if (alreadyReplied) {
+                        console.log("⏭️ Already replied to this post. Skipping.");
+                        continue;
+                    }
+
+                    // **Keyword quick filter first**
+                    const quickDecision = quickKeywordFilter(postText);
+                    
+                    let isLead = false;
+                    if (quickDecision === 'approve') {
+                        isLead = true;
+                    } else if (quickDecision === 'reject') {
+                        isLead = false;
+                    } else {
+                        // Unsure - use AI
+                        isLead = await evaluatePostWithAI(postText);
+                    }
                     
                     if (isLead) {
-                        console.log(`🎯 AI MATCH FOUND for post ID: ${postID}`);
+                        console.log(`🎯 MATCH FOUND: ${postID}`);
 
-                        // 2. CHECK LOCAL & REMOTE DEDUPLICATION
-                        if (localRepliedIds.has(postID)) {
-                            console.log("⏭️ Already replied in this session. Skipping.");
-                            continue;
-                        }
-
-                        const { data: existing } = await supabase.from('replies_log').select('*').eq('post_id', postID).single();
+                        const { data: existing } = await supabase.from('leads').select('*').eq('post_id', postID).single();
                         if (existing) {
-                            console.log("⏭️ Already logged in DB. Skipping.");
+                            console.log("⏭️ Lead already in database. Skipping.");
                             continue;
                         }
 
-                        console.log("✍️ Preparing to queue lead...");
+                        if (DRY_RUN) {
+                            console.log(`[DRY RUN] Would queue lead: ${postText.substring(0, 60)}...`);
+                            continue;
+                        }
 
                         const { error: insertError } = await supabase.from('leads').insert({
                             post_id: postID,
                             group_url: group.url,
                             post_text: postText,
-                            status: 'pending' // Send to human for review via Swipe UI
+                            status: 'pending'
                         });
 
                         if (insertError) {
                             if (insertError.message?.includes('duplicate')) {
-                                console.log("⏭️ Lead already exists in Supabase. Skipping.");
+                                console.log("⏭️ Lead already exists. Skipping.");
                             } else {
                                 console.error("❌ Failed to queue lead:", insertError.message);
                             }
                         } else {
-                            console.log("✅ Lead queued for review in Swipe UI.");
-                            localRepliedIds.add(postID); // Block in local memory
+                            console.log("✅ Lead queued for review.");
                         }
                     }
+                    
+                    await randomDelay(500, 1500);
                 }
             }
         }
 
     } catch (e) {
-        console.error("💥 Failure:", e);
+        console.error("💥 Error:", e);
         if (page) await captureProof(page, 'error');
     } finally {
-        if (page) await page.waitForTimeout(5000);
+        await randomDelay(3000, 5000);
         await context.close();
         console.log("🏁 Cycle complete.");
     }
 }
 
-runBot();
+// **MAIN LOOP - Run continuously**
+async function main() {
+    console.log("🚀 Fiesta Fresh Bot v2.0 Starting...");
+    console.log(`Supabase: ${supabaseUrl}`);
+    console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
+    
+    // Run immediately on start
+    await runBot().catch(err => console.error("Bot cycle failed:", err));
+    
+    // Then run on interval
+    setInterval(async () => {
+        console.log("\n⏰ Starting new scan cycle...");
+        await runBot().catch(err => console.error("Bot cycle failed:", err));
+    }, SCAN_INTERVAL);
+}
+
+main();

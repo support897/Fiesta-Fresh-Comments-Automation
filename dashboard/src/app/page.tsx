@@ -32,13 +32,13 @@ export default function Dashboard() {
       return;
     }
     try {
-      const { data: config } = await supabase.from('config').select('*').single();
+      const { data: config } = await supabase.from('config').select('*').maybeSingle();
       if (config) {
         setIsBotActive(!!config.bot_status);
         setConfigId(config.id);
       }
 
-      const { data: templateData } = await supabase.from('templates').select('*').eq('is_active', true).single();
+      const { data: templateData } = await supabase.from('templates').select('*').eq('is_active', true).maybeSingle();
       if (templateData) {
         setTemplate(templateData.content);
       }

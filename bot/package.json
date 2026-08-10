@@ -1,16 +1,17 @@
 {
-  "name": "bot",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "fiesta-fresh-bot",
+  "version": "2.0.0",
+  "main": "dist/bot.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "npx tsx bot.ts",
-    "build": "npx tsc"
+    "dev": "npx tsx watch bot.ts",
+    "build": "npx tsc",
+    "clean": "rm -rf dist node_modules"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["facebook", "automation", "comments", "bot"],
+  "author": "Fiesta Fresh Cleaning",
   "license": "ISC",
-  "description": "",
+  "description": "Facebook comments automation bot for Fiesta Fresh Cleaning",
   "dependencies": {
     "@google/genai": "^0.2.0",
     "@supabase/supabase-js": "^2.103.2",
@@ -19,15 +20,16 @@
     "playwright-core": "^1.59.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-core": "^24.41.0",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^6.0.1"
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/sqlite3": "^3.1.11",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.0",
     "typescript": "^6.0.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "type": "module"
 }
