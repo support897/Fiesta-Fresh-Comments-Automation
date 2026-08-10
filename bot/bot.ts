@@ -6,7 +6,6 @@ import * as dotenv from 'dotenv';
 import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
 import { pipeline, cos_sim } from '@xenova/transformers';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -208,41 +207,10 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
 }
 
 /**
- * AI Lead Evaluator
+ * Lead Evaluator (local semantic search - no API key needed)
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
-    if (!process.env.GEMINI_API_KEY) {
-        console.warn("⚠️ No GEMINI_API_KEY found, triggering Semantic Search fallback.");
-        return await evaluateWithSemanticSearch(postText);
-    }
-    
-    try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const { data: memoryData } = await supabase.from('ai_memory').select('rule_text');
-        const rules = memoryData?.map((m: any) => `- ${m.rule_text}`).join('\n') || 'No specific rules yet.';
-        
-        const prompt = `
-          You are a lead evaluator for a house cleaning business. 
-          Rules based on past feedback:
-          ${rules}
-          
-          Post: "${postText}"
-          
-          If this is a solid lead for residential house cleaning (not commercial, not cars, not generic chatter), reply with exactly "APPROVE".
-          Otherwise reply with "REJECT".
-        `;
-        
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-        });
-        
-        const aiText = response.text?.trim() || '';
-        return aiText.startsWith('APPROVE');
-    } catch (e) {
-        console.warn("⚠️ Gemini AI Evaluation failed. Triggering Semantic Search fallback. Error:", e);
-        return await evaluateWithSemanticSearch(postText);
-    }
+    return await evaluateWithSemanticSearch(postText);
 }
 
 async function runBot() {
