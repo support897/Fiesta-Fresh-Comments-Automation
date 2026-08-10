@@ -45,8 +45,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install Node.js dependencies
-RUN npm ci --only=production
+# Install Node.js dependencies (incl. tsx runtime from devDeps)
+RUN npm ci
 
 # Install Playwright Chromium (correct version for playwright-core 1.59.1)
 RUN npx playwright-core install chromium
