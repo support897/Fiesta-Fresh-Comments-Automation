@@ -346,19 +346,32 @@ async function runBot() {
     };
 
     if (proxyServer) {
-        console.log(`🌐 Using Proxy: ${proxyServer}`);
-        contextOptions.proxy = { server: proxyServer };
+        // Embed credentials directly in the SOCKS5 URL (required for SOCKS auth)
+        const proxyUser = process.env.PROXY_USERNAME;
+        const proxyPass = process.env.PROXY_PASSWORD;
+        let proxyUrl = proxyServer;
+        if (proxyUser && proxyPass && !proxyUrl.includes('@')) {
+            const [scheme, rest] = proxyUrl.split('://');
+            proxyUrl = `${scheme}://${encodeURIComponent(proxyUser)}:${encodeURIComponent(proxyPass)}@${rest}`;
+        }
+        console.log(`🌐 Using Proxy: ${proxyUrl}`);
+        contextOptions.proxy = { server: proxyUrl };
     }
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
 
-    if (contextOptions.proxy && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
-        await context.setExtraHTTPHeaders({
-            'Proxy-Authorization': 'Basic ' + Buffer.from(`${process.env.PROXY_USERNAME}:${process.env.PROXY_PASSWORD}`).toString('base64')
-        });
-    }
-
     const page: any = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+
+    // Restore saved session from Supabase (bypasses login/captcha if cookies are valid)
+    const { data: savedSession } = await supabase.from('sessions').select('cookies').eq('user_email', fbEmail).order('updated_at', { ascending: false }).limit(1).maybeSingle();
+    if (savedSession?.cookies && Array.isArray(savedSession.cookies)) {
+        try {
+            await context.addCookies(savedSession.cookies as any);
+            console.log(`💾 Restored session for ${fbEmail} from Supabase (${savedSession.cookies.length} cookies).`);
+        } catch (e) {
+            console.warn(`⚠️ Could not restore saved session: ${e}`);
+        }
+    }
 
     try {
         console.log("➡️ Navigating to Facebook...");
@@ -374,11 +387,13 @@ async function runBot() {
 
         if (await loginMarkers.first().isVisible()) {
             console.log("🔒 Login screen detected. Logging in...");
-            await humanType(page, '#email', fbEmail);
+            await humanType(page, '[name="email"]', fbEmail);
             await randomDelay(800, 1500);
-            await humanType(page, '#pass', fbPassword);
+            await humanType(page, '[name="pass"]', fbPassword);
             await randomDelay(500, 1000);
-            await page.click('[name="login"]');
+            await page.click('[aria-label="Log in"]').catch(async () => {
+                await page.click('input[type="submit"]').catch(() => page.click('[name="login"]'));
+            });
             
             console.log("⏳ Waiting for landing page...");
             await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA?"));
@@ -393,8 +408,15 @@ async function runBot() {
         // Verify login
         const isLogged = await homeMarkers.first().isVisible();
         if (!isLogged) {
-            console.error("❌ Login verification failed.");
-            await captureProof(page, 'login_failed');
+            const url = page.url();
+            const hasCaptcha = url.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
+            if (hasCaptcha) {
+                console.error("🚫 Facebook risk challenge detected (reCAPTCHA). A human must prime the session once: run `npx tsx prime-session.ts`, solve the captcha in the visible Chrome window, then cookies are saved for the bot to reuse.");
+                await captureProof(page, 'recaptcha_challenge');
+            } else {
+                console.error("❌ Login verification failed.");
+                await captureProof(page, 'login_failed');
+            }
             await context.close();
             return;
         }
