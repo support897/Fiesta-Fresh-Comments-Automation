@@ -406,7 +406,28 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 const postCount = await posts.count();
                 console.log(`📡 Found ${postCount} posts.`);
 
-                for (let i = 0; i < Math.min(postCount, 5); i++) {
+                let previousPostCount = 0;
+                let currentScrolls = 0;
+                const MAX_SCROLLS = 5; // How many times to scroll down
+
+                while (currentScrolls < MAX_SCROLLS) {
+                    await page.mouse.wheel(0, 5000); // Scroll down a significant amount
+                    await randomDelay(3000, 5000); // Wait for content to load
+
+                    const tempPostCount = await posts.count();
+                    if (tempPostCount === previousPostCount) {
+                        console.log("    No new posts loaded after scroll, stopping deeper scan.");
+                        break;
+                    }
+                    previousPostCount = tempPostCount;
+                    currentScrolls++;
+                    console.log(`    Scrolled ${currentScrolls}/${MAX_SCROLLS} times. Now visible: ${previousPostCount} posts.`);
+                }
+                
+                // Now process all visible posts after scrolling
+                const finalPostCount = await posts.count();
+                console.log(`    Processing up to ${finalPostCount} posts in this group.`);
+                for (let i = 0; i < finalPostCount; i++) {
                     const post = posts.nth(i);
                     const postText = (await post.innerText()).trim();
                     
