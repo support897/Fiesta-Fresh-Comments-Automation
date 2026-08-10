@@ -1,5 +1,6 @@
 import { chromium } from 'playwright-extra';
 // @ts-ignore
+import type { Page, Locator } from 'playwright-core';
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
@@ -22,6 +23,63 @@ const DRY_RUN = process.env.DRY_RUN === 'true';
 const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '60') * 1000;
 
 chromium.use(stealthPlugin());
+
+// --- Utility Functions ---
+
+/**
+ * Attempts to extract a real Facebook Post ID from a post element.
+ * Prioritizes permalinks (story_fbid) then data-ft attributes.
+ */
+async function extractFacebookPostId(postElement: Locator): Promise<string | null> {
+    let postId = null;
+
+    // 1. Try finding permalink from timestamp/date link
+    try {
+        const timestampLink = postElement.locator('a[href*="/posts/"], a[href*="story_fbid="], a[aria-label*="Time"], a[aria-label*="Date"]').first();
+        const permalink = await timestampLink.getAttribute('href');
+        if (permalink) {
+            const matchFbid = permalink.match(/story_fbid=(\d+)/);
+            if (matchFbid && matchFbid[1]) {
+                postId = matchFbid[1];
+                console.log(`    [PostID] Extracted from story_fbid: ${postId}`);
+            } else {
+                const matchPostPath = permalink.match(/\/posts\/(\d+)/);
+                if (matchPostPath && matchPostPath[1]) {
+                    postId = matchPostPath[1];
+                    console.log(`    [PostID] Extracted from /posts/: ${postId}`);
+                }
+            }
+        }
+    } catch (e: any) {
+        console.log(`    [PostID] Permalink extraction failed: ${e.message.slice(0, 80)}`);
+    }
+
+    // 2. Fallback to data-ft attribute on a parent element
+    if (!postId) {
+        try {
+            const dataFtElement = await postElement.locator('[data-ft]').first().elementHandle();
+            const dataFt = await dataFtElement?.getAttribute('data-ft');
+            if (dataFt) {
+                try {
+                    const ftData = JSON.parse(dataFt);
+                    if (ftData.fb_id) {
+                        postId = ftData.fb_id;
+                        console.log(`    [PostID] Extracted from data-ft.fb_id: ${postId}`);
+                    } else if (ftData.story_fbid) {
+                        postId = ftData.story_fbid;
+                        console.log(`    [PostID] Extracted from data-ft.story_fbid: ${postId}`);
+                    }
+                } catch (e) {
+                    console.log(`    [PostID] data-ft JSON parse error: ${e}`);
+                }
+            }
+        } catch (e: any) {
+            console.log(`    [PostID] data-ft attribute extraction failed: ${e.message.slice(0, 80)}`);
+        }
+    }
+
+    return postId;
+}
 
 // Keyword quick filters (instant approval/rejection - no AI cost)
 const APPROVE_KEYWORDS = [
@@ -430,9 +488,16 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 for (let i = 0; i < finalPostCount; i++) {
                     const post = posts.nth(i);
                     const postText = (await post.innerText()).trim();
-                    
-                    const textHash = postText.substring(0, 100).replace(/\s/g, '_');
-                    const postID = `hash_${textHash}`;
+
+                    // Attempt to extract real Facebook Post ID
+                    let postID = await extractFacebookPostId(post);
+
+                    // Fallback to text hash if no real ID is found
+                    if (!postID) {
+                        const textHash = postText.substring(0, 100).replace(/\s/g, '_');
+                        postID = `hash_${textHash}`;
+                        console.warn(`    ⚠️ Using text hash for Post ID (could not find real FBID): ${postID}`);
+                    }
 
                     // **Check dedup in replies_log**
                     const { data: alreadyReplied } = await supabase
