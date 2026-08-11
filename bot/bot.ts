@@ -20,7 +20,7 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
-const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '60') * 1000;
+const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '900') * 1000;
 
 // --- Account Configuration ---
 // FB_ACCOUNTS = JSON array of {email, password} for multi-account rotation
@@ -586,6 +586,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     continue;
                 }
                 await randomDelay(2000, 4000);
+
+                // Human-like pacing — Facebook kills sessions on fast request bursts
+                // (datacenter IP + rapid group loads triggered the risk engine). Keep
+                // several seconds of quiet time between group navigations.
+                await randomDelay(4000, 8000);
 
                 // Switch to Discussion if Buy/Sell layout
                 const discussionTab = page.locator('span:has-text("Discussion")').first();
