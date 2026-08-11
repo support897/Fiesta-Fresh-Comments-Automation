@@ -280,7 +280,7 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
  */
 async function captureProof(page: any, fileName: string) {
     try {
-        const screenshot = await page.screenshot({ fullPage: false });
+        const screenshot = await page.screenshot({ fullPage: false, timeout: 8000 });
         const filePath = `proofs/${Date.now()}_${fileName}.png`;
         
         const { data, error } = await supabase.storage
@@ -403,10 +403,12 @@ async function runBot() {
     const page: any = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
     // Restore saved session from Supabase (bypasses login/captcha if cookies are valid)
+    let restoredSession = false;
     const { data: savedSession } = await supabase.from('sessions').select('cookies').eq('user_email', fbEmail).order('updated_at', { ascending: false }).limit(1).maybeSingle();
     if (savedSession?.cookies && Array.isArray(savedSession.cookies)) {
         try {
             await context.addCookies(savedSession.cookies as any);
+            restoredSession = true;
             console.log(`💾 Restored session for ${fbEmail} from Supabase (${savedSession.cookies.length} cookies).`);
         } catch (e) {
             console.warn(`⚠️ Could not restore saved session: ${e}`);
@@ -447,6 +449,9 @@ async function runBot() {
 
         // Verify login
         const isLogged = await homeMarkers.first().isVisible();
+        if (!restoredSession && isLogged) {
+            console.warn(`⚠️ No saved session for ${fbEmail} but logged in — using stale profile cookies from a previous account. Run \`npx tsx prime-session.ts\` to prime this account's session before going live.`);
+        }
         if (!isLogged) {
             const url = page.url();
             const hasCaptcha = url.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
@@ -545,7 +550,19 @@ We will also send you a DM just in case you have any questions. Make sure to che
         if (groups) {
             for (const group of groups) {
                 console.log(`\n📡 Scanning: ${group.url}`);
-                await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                try {
+                    try {
+                        await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    } catch (gotoErr) {
+                        console.warn(`⚠️ goto timed out for ${group.url}, retrying once...`);
+                        await randomDelay(4000, 6000);
+                        await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Skipping group ${group.url}: ${(e as any).message?.slice(0, 100)}`);
+                    await randomDelay(2000, 3000);
+                    continue;
+                }
                 await randomDelay(2000, 4000);
 
                 // Switch to Discussion if Buy/Sell layout
