@@ -454,7 +454,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     continue;
                 }
                 
-                await page.goto(lead.group_url, { waitUntil: 'networkidle' });
+                await page.goto(lead.group_url, { waitUntil: 'domcontentloaded', timeout: 45000 });
                 await randomDelay(2000, 4000);
                 
                 // Scroll to find post
@@ -509,7 +509,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
         if (groups) {
             for (const group of groups) {
                 console.log(`\n📡 Scanning: ${group.url}`);
-                await page.goto(group.url, { waitUntil: 'networkidle' });
+                await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
                 await randomDelay(2000, 4000);
 
                 // Switch to Discussion if Buy/Sell layout
