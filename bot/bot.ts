@@ -276,6 +276,16 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
 }
 
 /**
+ * Detect Facebook's "Continue as <name> / Use another profile" session
+ * checkpoint — shown when FB invalidates a session. The home page stays on
+ * facebook.com with no login form, so the old URL/login-form check missed it.
+ */
+async function isSessionCheckpoint(page: any): Promise<boolean> {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    return bodyText.includes('Use another profile') && bodyText.includes('Continue');
+}
+
+/**
  * Capture and upload screenshot to Supabase Storage
  */
 async function captureProof(page: any, fileName: string) {
@@ -468,10 +478,12 @@ async function runBot() {
         // Verify login — we cannot rely on the home-feed markers because the
         // route-blocking (needed to survive Render's 512Mi limit) stops the home
         // SPA from rendering them. Instead: logged-in == login form absent AND
-        // not on a login/captcha URL.
+        // no checkpoint interstitial AND not on a login/captcha URL.
         const currentUrl = page.url();
         const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
+        const checkpointVisible = await isSessionCheckpoint(page);
         const isLogged = !loginFormVisible
+            && !checkpointVisible
             && !currentUrl.includes('login.php')
             && !currentUrl.includes('two_step_verification')
             && !currentUrl.includes('recaptcha');
@@ -483,6 +495,9 @@ async function runBot() {
             if (hasCaptcha) {
                 console.error("🚫 Facebook risk challenge detected (reCAPTCHA). A human must prime the session once: run `npx tsx prime-session.ts`, solve the captcha in the visible Chrome window, then cookies are saved for the bot to reuse.");
                 await captureProof(page, 'recaptcha_challenge');
+            } else if (checkpointVisible) {
+                console.error("🚨 Session invalidated by Facebook (\"Continue as\" checkpoint). A human must re-prime the session: run `npx tsx prime-session.ts` and confirm the account in the visible Chrome window.");
+                await captureProof(page, 'session_checkpoint');
             } else {
                 console.error("❌ Login verification failed.");
                 await captureProof(page, 'login_failed');
@@ -594,6 +609,14 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 // (datacenter IP + rapid group loads triggered the risk engine). Keep
                 // several seconds of quiet time between group navigations.
                 await randomDelay(4000, 8000);
+
+                // Detect session loss: FB redirects group pages to /login/ when the
+                // session dies mid-patrol. Stop early instead of scanning logged-out.
+                if (page.url().includes('/login/')) {
+                    console.error("🚨 Session invalidated by Facebook (group redirected to /login/). Aborting patrol early.");
+                    await captureProof(page, 'session_lost_login');
+                    return;
+                }
 
                 // Switch to Discussion if Buy/Sell layout
                 const discussionTab = page.locator('span:has-text("Discussion")').first();
