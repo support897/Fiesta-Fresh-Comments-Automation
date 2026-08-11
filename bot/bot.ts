@@ -115,6 +115,42 @@ async function extractFacebookPostId(postElement: Locator): Promise<string | nul
     return postId;
 }
 
+/**
+ * Extracts a real Facebook Post ID from a post-message element by walking up
+ * ancestor containers (permalink links and data-ft live on containers, not the
+ * message div itself).
+ */
+async function extractFacebookPostIdFromMessage(message: any): Promise<string | null> {
+    try {
+        return await message.evaluate((el: HTMLElement) => {
+            let cur: HTMLElement | null = el;
+            for (let i = 0; cur && i < 10; i++) {
+                const permalink = cur.querySelector('a[href*="/posts/"], a[href*="story_fbid="], a[aria-label*="Time"], a[aria-label*="Date"]');
+                if (permalink) {
+                    const href = permalink.getAttribute('href') || '';
+                    const m1 = href.match(/story_fbid=(\d+)/);
+                    if (m1 && m1[1]) return m1[1];
+                    const m2 = href.match(/\/posts\/(\d+)/);
+                    if (m2 && m2[1]) return m2[1];
+                }
+                const ft = cur.querySelector('[data-ft]');
+                if (ft) {
+                    try {
+                        const f = JSON.parse(ft.getAttribute('data-ft') || '');
+                        if (f.fb_id) return String(f.fb_id);
+                        if (f.story_fbid) return String(f.story_fbid);
+                    } catch { /* ignore */ }
+                }
+                cur = cur.parentElement;
+            }
+            return null;
+        });
+    } catch (e: any) {
+        console.log(`    [PostID] extraction failed: ${e.message.slice(0, 80)}`);
+        return null;
+    }
+}
+
 // Keyword quick filters (instant approval/rejection - no AI cost)
 const APPROVE_KEYWORDS = [
     'cleaner', 'cleaning', 'clean', 'bond clean', 'end of lease', 
@@ -524,9 +560,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 await page.mouse.wheel(0, 800);
                 await randomDelay(2000, 4000);
 
-                await page.waitForSelector('[role="article"]', { timeout: 10000 }).catch(() => null);
-                
-                const posts = page.locator('[role="article"]');
+                // Facebook group posts no longer use role=article; the post text lives in
+                // [data-ad-preview="message"] elements. Wait for them to render.
+                await page.waitForSelector('[data-ad-preview="message"]', { timeout: 20000 }).catch(() => null);
+
+                const posts = page.locator('[data-ad-preview="message"]');
                 const postCount = await posts.count();
                 console.log(`📡 Found ${postCount} posts.`);
 
@@ -556,7 +594,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     const postText = (await post.innerText()).trim();
 
                     // Attempt to extract real Facebook Post ID
-                    let postID = await extractFacebookPostId(post);
+                    let postID = await extractFacebookPostIdFromMessage(post);
 
                     // Fallback to text hash if no real ID is found
                     if (!postID) {
