@@ -320,7 +320,11 @@ async function runBot() {
     console.log(`👤 Account: ${fbEmail}`);
 
     // 1. Check Config
-    const { data: config } = await supabase.from('config').select('*').single();
+    const { data: config, error: configErr } = await supabase.from('config').select('*').single();
+    if (configErr) {
+        console.log(`⚠️ Config read error (${configErr.code || configErr.message}). Retrying later...`);
+        return;
+    }
     if (!config || !config.bot_status) {
         console.log("⏸️ Bot is paused in Supabase config. Waiting...");
         return;
@@ -646,14 +650,20 @@ async function main() {
 
     // Health check server (required for Render to keep the service alive)
     const PORT = parseInt(process.env.PORT || '8080');
-    http.createServer((req, res) => {
+    http.createServer(async (req, res) => {
+        let cfg: any = null;
+        try {
+            const r = await supabase.from('config').select('bot_status').single();
+            cfg = r.data ?? null;
+        } catch { /* health endpoint stays up even if config fails */ }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             status: 'ok',
             mode: DRY_RUN ? 'dry_run' : 'live',
             cycles: cycleCount,
             lastCycle: lastCycleTime,
-            running: isRunning
+            running: isRunning,
+            config: cfg?.data ?? null,
         }));
     }).listen(PORT, () => {
         console.log(`❤️ Health check server listening on port ${PORT}`);
