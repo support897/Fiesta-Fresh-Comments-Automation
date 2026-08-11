@@ -657,13 +657,15 @@ async function main() {
             cfg = r.data ?? null;
         } catch { /* health endpoint stays up even if config fails */ }
         res.writeHead(200, { 'Content-Type': 'application/json' });
+        const k = process.env.SUPABASE_ANON_KEY || '';
         res.end(JSON.stringify({
             status: 'ok',
             mode: DRY_RUN ? 'dry_run' : 'live',
             cycles: cycleCount,
             lastCycle: lastCycleTime,
             running: isRunning,
-            config: cfg?.data ?? null,
+            config: cfg ?? null,
+            keyFp: k.length ? `${k.slice(0, 8)}...${k.slice(-6)} (len ${k.length})` : '(missing)',
         }));
     }).listen(PORT, () => {
         console.log(`❤️ Health check server listening on port ${PORT}`);
