@@ -432,7 +432,11 @@ async function runBot() {
 
     try {
         console.log("➡️ Navigating to Facebook...");
-        await page.goto('https://www.facebook.com');
+        await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(async () => {
+            console.log("⚠️ Home goto slow — retrying once...");
+            await randomDelay(3000, 5000);
+            await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        });
         await randomDelay(3000, 5000);
 
         // Close overlays
