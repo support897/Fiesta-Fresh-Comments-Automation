@@ -405,6 +405,16 @@ async function runBot() {
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
 
+    // Block heavy downloads (images/media/fonts) — we only scrape text. Cuts memory
+    // massively, which is critical on Render's 512Mi instance (was OOM-killing us).
+    await context.route('**/*', (route: any) => {
+        const type = route.request().resourceType();
+        if (type === 'image' || type === 'media' || type === 'font') {
+            return route.abort();
+        }
+        return route.continue();
+    });
+
     const page: any = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
     // Restore saved session from Supabase (bypasses login/captcha if cookies are valid)
@@ -707,6 +717,10 @@ async function main() {
     console.log("🚀 Fiesta Fresh Bot v2.0 Starting...");
     console.log(`Supabase: ${supabaseUrl}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
+    {
+        const m = process.memoryUsage();
+        console.log(`📊 Boot RSS ${(m.rss / 1048576).toFixed(0)}MB | heap ${(m.heapUsed / 1048576).toFixed(0)}MB | heapTotal ${(m.heapTotal / 1048576).toFixed(0)}MB | external ${(m.external / 1048576).toFixed(0)}MB`);
+    }
 
     // Health check server (required for Render to keep the service alive)
     const PORT = parseInt(process.env.PORT || '8080');
