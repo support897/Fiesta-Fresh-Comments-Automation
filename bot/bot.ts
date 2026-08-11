@@ -513,7 +513,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 await randomDelay(2000, 4000);
 
                 // Switch to Discussion if Buy/Sell layout
-                const discussionTab = page.locator('span:has-text("Discussion")');
+                const discussionTab = page.locator('span:has-text("Discussion")').first();
                 if (await discussionTab.isVisible()) {
                     console.log("📂 Switching to Discussion tab...");
                     await discussionTab.click();
