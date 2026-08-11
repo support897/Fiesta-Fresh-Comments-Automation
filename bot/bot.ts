@@ -382,7 +382,8 @@ async function runBot() {
             '--single-process',
             '--no-zygote',
             '--autoplay-policy=user-gesture-required',
-            '--js-flags=--max-old-space-size=256'
+            '--blink-settings=imagesEnabled=false',
+            '--js-flags=--max-old-space-size=128'
         ],
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
@@ -618,7 +619,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                 let previousPostCount = 0;
                 let currentScrolls = 0;
-                const MAX_SCROLLS = 4; // How many times to scroll down
+                const MAX_SCROLLS = 2; // How many times to scroll down (keeps DOM/memory low)
 
                 while (currentScrolls < MAX_SCROLLS) {
                     await page.mouse.wheel(0, 5000); // Scroll down a significant amount
