@@ -462,14 +462,21 @@ async function runBot() {
             console.log("💾 Session updated in Supabase.");
         }
 
-        // Verify login
-        const isLogged = await homeMarkers.first().isVisible();
+        // Verify login — we cannot rely on the home-feed markers because the
+        // route-blocking (needed to survive Render's 512Mi limit) stops the home
+        // SPA from rendering them. Instead: logged-in == login form absent AND
+        // not on a login/captcha URL.
+        const currentUrl = page.url();
+        const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
+        const isLogged = !loginFormVisible
+            && !currentUrl.includes('login.php')
+            && !currentUrl.includes('two_step_verification')
+            && !currentUrl.includes('recaptcha');
         if (!restoredSession && isLogged) {
             console.warn(`⚠️ No saved session for ${fbEmail} but logged in — using stale profile cookies from a previous account. Run \`npx tsx prime-session.ts\` to prime this account's session before going live.`);
         }
         if (!isLogged) {
-            const url = page.url();
-            const hasCaptcha = url.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
+            const hasCaptcha = currentUrl.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
             if (hasCaptcha) {
                 console.error("🚫 Facebook risk challenge detected (reCAPTCHA). A human must prime the session once: run `npx tsx prime-session.ts`, solve the captcha in the visible Chrome window, then cookies are saved for the bot to reuse.");
                 await captureProof(page, 'recaptcha_challenge');
