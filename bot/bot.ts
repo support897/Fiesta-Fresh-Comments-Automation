@@ -638,7 +638,13 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 console.log(`    Processing up to ${finalPostCount} posts in this group.`);
                 for (let i = 0; i < finalPostCount; i++) {
                     const post = posts.nth(i);
-                    const postText = (await post.innerText()).trim();
+                    let postText: string;
+                    try {
+                        postText = (await post.innerText({ timeout: 10000 })).trim();
+                    } catch (e) {
+                        console.warn(`    ⚠️ Could not read post text (${e instanceof Error ? e.message.split('\n')[0] : e}) - skipping.`);
+                        continue;
+                    }
 
                     // Attempt to extract real Facebook Post ID
                     let postID = await extractFacebookPostIdFromMessage(post);
