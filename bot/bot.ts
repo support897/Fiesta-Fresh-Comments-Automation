@@ -379,11 +379,9 @@ async function runBot() {
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-gpu',
             '--disable-dev-shm-usage',
-            '--single-process',
-            '--no-zygote',
             '--autoplay-policy=user-gesture-required',
             '--blink-settings=imagesEnabled=false',
-            '--js-flags=--max-old-space-size=128'
+            '--js-flags=--max-old-space-size=256'
         ],
         userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
