@@ -380,24 +380,32 @@ async function runBot() {
     const userDataDir = path.join(__dirname, 'FiestaSession');
     console.log(`🧠 Using Persistent Context: ${userDataDir}`);
 
+    // Headed (full Chrome, needs a display/Xvfb) is far harder for Facebook to
+    // fingerprint than Playwright's headless shell — sessions were being killed
+    // after ~1hr of headless group scanning. Set HEADLESS=false on servers that
+    // run Xvfb (e.g. the VPS) to use headed mode.
+    const headless = process.env.HEADLESS !== 'false';
     const contextOptions: any = {
-        headless: true,
+        headless,
         args: [
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-gpu',
             '--disable-dev-shm-usage',
             '--autoplay-policy=user-gesture-required',
-            '--blink-settings=imagesEnabled=false',
             '--js-flags=--max-old-space-size=256'
         ],
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 800 },
         locale: 'en-AU',
         timezoneId: 'Australia/Brisbane',
     };
+    if (headless) {
+        // Headless-shell (Render): strip GPU/images to survive 512Mi.
+        contextOptions.args.push('--disable-gpu', '--blink-settings=imagesEnabled=false');
+    }
+    // Headed mode: no UA override, no image suppression — a normal Linux Chrome
+    // (matching its real platform) is far less suspicious than a Mac UA on Linux.
 
     if (proxyServer) {
         // Embed credentials directly in the SOCKS5 URL (required for SOCKS auth)
@@ -414,11 +422,12 @@ async function runBot() {
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
 
-    // Block heavy downloads (images/media/fonts) — we only scrape text. Cuts memory
-    // massively, which is critical on Render's 512Mi instance (was OOM-killing us).
+    // Block heavy downloads — we only scrape text. Cuts memory massively, which is
+    // critical on Render's 512Mi instance (was OOM-killing us). In headed mode we
+    // only block media/video so the browser looks like a normal one loading images.
     await context.route('**/*', (route: any) => {
         const type = route.request().resourceType();
-        if (type === 'image' || type === 'media' || type === 'font') {
+        if (type === 'media' || (headless && (type === 'image' || type === 'font'))) {
             return route.abort();
         }
         return route.continue();
