@@ -379,6 +379,7 @@ async function runBot() {
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-gpu',
             '--disable-dev-shm-usage',
+            '--single-process',
             '--no-zygote',
             '--autoplay-policy=user-gesture-required',
             '--js-flags=--max-old-space-size=256'
@@ -753,6 +754,12 @@ async function main() {
         console.log("\n⏰ Starting new scan cycle...");
         cycle();
     }, SCAN_INTERVAL);
+
+    // Memory diagnostics (critical: Render OOM-kills at 512Mi)
+    setInterval(() => {
+        const m = process.memoryUsage();
+        console.log(`📊 RSS ${(m.rss / 1048576).toFixed(0)}MB | heap ${(m.heapUsed / 1048576).toFixed(0)}MB | heapTotal ${(m.heapTotal / 1048576).toFixed(0)}MB | external ${(m.external / 1048576).toFixed(0)}MB`);
+    }, 15000);
 }
 
 main();
