@@ -178,6 +178,20 @@ export default function CookiesPage() {
     emerald: "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20",
   };
 
+  const commandsMap: Record<string, string> = {
+    "ilse2taylor@gmail.com": "npx tsx bot/prime-session.ts 0",
+    "projects.reports.ilse@gmail.com": "npx tsx bot/prime-session.ts 1",
+    "account3": "npx tsx bot/save_account3_session.ts",
+  };
+
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopyCommand = (key: string, cmd: string) => {
+    navigator.clipboard.writeText(cmd);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-700 font-sans">
       {/* Header */}
@@ -192,7 +206,7 @@ export default function CookiesPage() {
                 Cookie Manager 🍪
               </h1>
               <p className="text-sm text-slate-500 font-medium mt-0.5">
-                Paste Facebook cookie JSON from your browser plugin → auto-syncs to VPS bot
+                Run local script commands to prime session &amp; save cookies directly to Supabase / VPS
               </p>
             </div>
           </div>
@@ -202,7 +216,7 @@ export default function CookiesPage() {
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all disabled:opacity-50 self-start md:self-auto"
           >
             <RefreshCw size={14} className={isLoading ? "animate-spin" : ""} />
-            Refresh
+            Refresh Status
           </button>
         </div>
       </div>
@@ -211,12 +225,7 @@ export default function CookiesPage() {
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
         <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
         <div className="text-xs text-amber-800 leading-relaxed">
-          <strong>How to use:</strong> In Chrome, open your{" "}
-          <strong>Cookie Editor / EditThisCookie</strong> plugin on facebook.com, click{" "}
-          <strong>Export as JSON</strong>, then paste the full JSON array into the box below for
-          each account. Click <strong>Save &amp; Sync</strong>. The bot picks up the new cookies on
-          its next scan cycle (within 30 minutes) automatically via Supabase — no VPS restart
-          needed.
+          <strong>How to restore cookies:</strong> Copy the command below for the target account, run it in your terminal on your computer. It will open a real browser window. Complete the Facebook login/2FA, and the script will automatically capture and sync cookies to the VPS bot via Supabase.
         </div>
       </div>
 
@@ -226,9 +235,8 @@ export default function CookiesPage() {
           const session = sessions[account.supabaseEmail];
           const cookieCount = session?.cookies?.length ?? 0;
           const isConnected = cookieCount > 0;
-          const uploadState = uploadStates[account.key] || "idle";
-          const uploadError = uploadErrors[account.key] || "";
           const isJsonVisible = showJson[account.key] ?? false;
+          const command = commandsMap[account.supabaseEmail] || "";
 
           return (
             <div
@@ -261,14 +269,21 @@ export default function CookiesPage() {
                         isConnected ? "bg-emerald-500 animate-pulse" : "bg-red-500"
                       }`}
                     />
-                    {isConnected ? `${cookieCount} cookies active` : "No cookies — bot blocked"}
+                    {isConnected ? "Active" : "Down"}
                   </span>
 
                   {/* Cookie count badge */}
+                  {isConnected && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200">
+                      Active: {cookieCount} cookies
+                    </span>
+                  )}
+
+                  {/* Update timestamp */}
                   {session?.updated_at && (
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200">
                       <Clock size={10} />
-                      Updated {new Date(session.updated_at).toLocaleString()}
+                      Synced {new Date(session.updated_at).toLocaleString()}
                     </span>
                   )}
                 </div>
@@ -280,7 +295,7 @@ export default function CookiesPage() {
                   <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-100 bg-slate-50/50">
                     <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                       <ShieldCheck size={12} className="text-emerald-500" />
-                      Active Cookies ({cookieCount})
+                      Active Session Metadata
                     </span>
                     <div className="flex items-center gap-2">
                       <button
@@ -299,16 +314,16 @@ export default function CookiesPage() {
                         onClick={() => handleClearSession(account.key, account.supabaseEmail)}
                         className="text-[11px] text-red-500 hover:text-red-700 font-semibold flex items-center gap-1 transition-colors"
                       >
-                        <Trash2 size={11} /> Clear
+                        <Trash2 size={11} /> Force Logout
                       </button>
                     </div>
                   </div>
                   {isJsonVisible && (
-                    <pre className="p-4 text-[10px] text-slate-700 overflow-x-auto max-h-40 font-mono leading-relaxed">
-                      {JSON.stringify(session?.cookies?.slice(0, 5), null, 2)}
-                      {(session?.cookies?.length ?? 0) > 5 && (
+                    <pre className="p-4 text-[10px] text-slate-700 overflow-x-auto max-h-40 font-mono leading-relaxed bg-slate-50">
+                      {JSON.stringify(session?.cookies?.slice(0, 3), null, 2)}
+                      {(session?.cookies?.length ?? 0) > 3 && (
                         <span className="text-slate-400">
-                          {"\n"}... +{(session?.cookies?.length ?? 0) - 5} more cookies
+                          {"\n"}... +{(session?.cookies?.length ?? 0) - 3} more cookies
                         </span>
                       )}
                     </pre>
@@ -316,55 +331,25 @@ export default function CookiesPage() {
                 </div>
               )}
 
-              {/* JSON Paste Area */}
+              {/* Command Box Area */}
               <div className="space-y-3">
-                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2">
-                  <Upload size={12} />
-                  Paste New Cookie JSON (from EditThisCookie / Cookie Editor plugin)
+                <label className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  Terminal Command (Run locally on your computer)
                 </label>
-                <textarea
-                  id={`cookie-input-${account.key}`}
-                  value={jsonInputs[account.key] || ""}
-                  onChange={(e) =>
-                    setJsonInputs((prev) => ({ ...prev, [account.key]: e.target.value }))
-                  }
-                  placeholder={`[\n  {\n    "name": "c_user",\n    "value": "123456789",\n    "domain": ".facebook.com",\n    "path": "/",\n    "secure": true,\n    "httpOnly": false,\n    "sameSite": "None",\n    "expires": 1799999999\n  },\n  ...\n]`}
-                  rows={8}
-                  className="w-full font-mono text-[11px] p-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-800 placeholder:text-slate-300 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 resize-y transition-all"
-                />
-
-                {/* Error message */}
-                {uploadError && (
-                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
-                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                    <span>{uploadError}</span>
-                  </div>
-                )}
-
-                {/* Success message */}
-                {uploadState === "success" && (
-                  <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700 font-semibold">
-                    <CheckCircle2 size={14} />
-                    ✅ Cookies saved to Supabase! Bot will pick them up on the next scan cycle
-                    (within 30 min).
-                  </div>
-                )}
-
-                {/* Save button */}
-                <button
-                  id={`save-cookie-${account.key}`}
-                  onClick={() => handleUpload(account.key, account.supabaseEmail)}
-                  disabled={uploadState === "loading" || !jsonInputs[account.key]?.trim()}
-                  className={`w-full py-3 rounded-2xl text-white text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-40 disabled:cursor-not-allowed ${buttonMap[account.color]}`}
-                >
-                  {uploadState === "loading" ? (
-                    <><RefreshCw size={16} className="animate-spin" /> Saving to Supabase...</>
-                  ) : uploadState === "success" ? (
-                    <><CheckCircle2 size={16} /> Synced!</>
-                  ) : (
-                    <><Upload size={16} /> Save &amp; Sync to VPS Bot</>
-                  )}
-                </button>
+                <div className="relative flex items-center bg-slate-900 text-slate-100 p-4 rounded-2xl font-mono text-xs overflow-x-auto select-all pr-12">
+                  <span>{command}</span>
+                  <button
+                    onClick={() => handleCopyCommand(account.key, command)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-100 transition-colors"
+                    title="Copy Command"
+                  >
+                    {copiedKey === account.key ? (
+                      <CheckCircle2 size={16} className="text-emerald-500" />
+                    ) : (
+                      <Copy size={16} />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -373,10 +358,7 @@ export default function CookiesPage() {
 
       {/* Footer note */}
       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-500 leading-relaxed">
-        <strong className="text-slate-700">🔄 How sync works:</strong> Cookies are saved to the
-        Supabase <code className="bg-slate-100 px-1 rounded text-[10px]">sessions</code> table. The
-        VPS bot reads fresh cookies from Supabase at the start of each scan cycle. No manual VPS
-        restart needed — it automatically uses the new session on its next run (within 30 minutes).
+        <strong className="text-slate-700">🔄 Auto-Down Sync:</strong> If Facebook invalidates these cookies at any point, the VPS bot automatically detects it, clears them from the database, and marks the status here as <code className="bg-red-100 text-red-700 px-1 rounded text-[10px]">Down</code> in real-time. Simply copy and run the terminal command above to restore active status.
       </div>
     </div>
   );
