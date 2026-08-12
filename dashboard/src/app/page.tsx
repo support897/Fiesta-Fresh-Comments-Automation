@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { cn } from "@/lib/utils";
 import {
   BarChart3,
   CheckCircle2,
@@ -20,6 +21,7 @@ import {
   Eye,
 } from "lucide-react";
 
+/* ─────────────────────────────────────────── types ── */
 type LeadItem = {
   id: string;
   post_id: string;
@@ -36,9 +38,9 @@ type ReplyLog = {
   account_name?: string;
   comment_id?: string;
   replied_at: string;
-  screenshot_path?: string;
 };
 
+/* ─────────────────────────────────────── constants ── */
 const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
@@ -52,130 +54,100 @@ You can check out everything we offer, read our reviews and even book in 60 seco
 We will also send you a DM just in case you have any questions. Make sure to check your message requests! We cannot wait to help you out. 🎉`;
 
 const PROFILES = [
-  { name: "Ilse",           initial: "I", sub: "File: 1.json · 50% Main Reply",            color: "bg-slate-50 text-slate-700" },
-  { name: "Taylor",         initial: "T", sub: "File: 2.json · 50% Main Reply",            color: "bg-slate-50 text-slate-700" },
-  { name: "Website Booster",initial: "W", sub: "File: account3_cookies.json · 100% URL",   color: "bg-blue-50 text-blue-600"  },
+  { name: "Ilse",            initial: "I", sub: "File: 1.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
+  { name: "Taylor",          initial: "T", sub: "File: 2.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
+  { name: "Website Booster", initial: "W", sub: "File: account3_cookies.json · 100% URL", color: "bg-blue-50 text-blue-600"   },
 ];
 
+/* ─────────────────────────────────────── component ── */
 export default function DashboardPage() {
-  const [isBotActive, setIsBotActive] = useState(true);
-  const [configId, setConfigId] = useState<number | null>(1);
+  const [isBotActive, setIsBotActive]   = useState(true);
+  const [configId, setConfigId]         = useState<number | null>(1);
   const [stats, setStats] = useState({
     totalDispatches: 204,
-    commentsPosted: 204,
-    activeProfiles: 3,
-    targetGroups: 85,
+    commentsPosted:  204,
+    activeProfiles:  3,
+    targetGroups:    85,
   });
-  const [replies, setReplies] = useState<ReplyLog[]>([]);
-  const [leads, setLeads] = useState<LeadItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [triggering, setTriggering] = useState(false);
+  const [replies, setReplies]           = useState<ReplyLog[]>([]);
+  const [leads, setLeads]               = useState<LeadItem[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [triggering, setTriggering]     = useState(false);
   const [selectedLead, setSelectedLead] = useState<LeadItem | null>(null);
-  const [showProof, setShowProof] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [nextScan, setNextScan] = useState("");
+  const [copied, setCopied]             = useState(false);
+  const [nextScan, setNextScan]         = useState("");
 
+  /* ── data fetch ── */
   const loadData = useCallback(async () => {
     try {
       const { data: config } = await supabase.from("config").select("*").maybeSingle();
-      if (config) {
-        setIsBotActive(!!config.bot_status);
-        setConfigId(config.id);
-      }
+      if (config) { setIsBotActive(!!config.bot_status); setConfigId(config.id); }
 
-      const { count: totalCount } = await supabase
-        .from("leads")
-        .select("*", { count: "exact", head: true });
-
-      const { count: postedCount } = await supabase
-        .from("replies_log")
-        .select("*", { count: "exact", head: true });
-
-      const { count: groupCount } = await supabase
-        .from("groups")
-        .select("*", { count: "exact", head: true })
-        .eq("is_active", true);
+      const { count: total  } = await supabase.from("leads").select("*", { count: "exact", head: true });
+      const { count: posted } = await supabase.from("replies_log").select("*", { count: "exact", head: true });
+      const { count: groups } = await supabase.from("groups").select("*", { count: "exact", head: true }).eq("is_active", true);
 
       setStats({
-        totalDispatches: totalCount ? Math.max(totalCount, 204) : 204,
-        commentsPosted: postedCount ? Math.max(postedCount, 204) : 204,
-        activeProfiles: 3,
-        targetGroups: groupCount ? Math.max(groupCount, 85) : 85,
+        totalDispatches: total  ? Math.max(total,  204) : 204,
+        commentsPosted:  posted ? Math.max(posted, 204) : 204,
+        activeProfiles:  3,
+        targetGroups:    groups ? Math.max(groups, 85)  : 85,
       });
 
-      const { data: replyData } = await supabase
-        .from("replies_log")
-        .select("*")
-        .order("replied_at", { ascending: false })
-        .limit(50);
-      if (replyData) setReplies(replyData as ReplyLog[]);
+      const { data: rd } = await supabase.from("replies_log").select("*").order("replied_at", { ascending: false }).limit(50);
+      if (rd) setReplies(rd as ReplyLog[]);
 
-      const { data: leadData } = await supabase
-        .from("leads")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (leadData) setLeads(leadData as LeadItem[]);
-    } catch (e) {
-      console.error("fetchData error:", e);
-    } finally {
-      setLoading(false);
-    }
+      const { data: ld } = await supabase.from("leads").select("*").order("created_at", { ascending: false }).limit(50);
+      if (ld) setLeads(ld as LeadItem[]);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     loadData();
 
-    // Next scan countdown (every 30 min)
+    // next scan countdown
     const now = new Date();
-    const minsUntil = 30 - (now.getMinutes() % 30);
-    const next = new Date(now.getTime() + minsUntil * 60000);
+    const next = new Date(now.getTime() + (30 - now.getMinutes() % 30) * 60000);
     next.setSeconds(0);
-    setNextScan(
-      next.toLocaleString("en-AU", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
-    );
+    setNextScan(next.toLocaleString("en-AU", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }));
 
-    const channel = supabase
-      .channel("dashboard-live")
+    const ch = supabase.channel("dashboard-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "replies_log" }, loadData)
-      .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, loadData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "leads"       }, loadData)
       .subscribe();
 
-    const interval = setInterval(loadData, 20000);
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(interval);
-    };
+    const iv = setInterval(loadData, 20000);
+    return () => { supabase.removeChannel(ch); clearInterval(iv); };
   }, [loadData]);
 
+  /* ── bot toggle ── */
   const handleToggleBot = async () => {
     setTriggering(true);
     const next = !isBotActive;
     setIsBotActive(next);
-    try {
-      if (configId) await supabase.from("config").update({ bot_status: next }).eq("id", configId);
-    } catch (e) { console.error(e); }
+    try { if (configId) await supabase.from("config").update({ bot_status: next }).eq("id", configId); }
+    catch (e) { console.error(e); }
     finally { setTriggering(false); }
   };
 
+  /* ── copy template ── */
   const handleCopy = () => {
     navigator.clipboard.writeText(FIXED_REPLY_TEMPLATE);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Build table rows — replies are the source of truth for "posted"
+  /* ── build table rows ── */
   const tableRows = replies.map((r, idx) => {
     const isBooster = r.account_name?.toLowerCase().includes("booster") || r.comment_id?.startsWith("booster_");
-    const account = r.account_name || (isBooster ? "Website Booster" : idx % 2 === 0 ? "Ilse" : "Taylor");
+    const account   = r.account_name || (isBooster ? "Website Booster" : idx % 2 === 0 ? "Ilse" : "Taylor");
     const matchedLead = leads.find((l) => l.post_id === r.post_id);
-    const groupLabel = r.group_url
-      .replace(/https?:\/\/www\.facebook\.com\/groups\//, "")
-      .replace(/\/$/, "")
-      .slice(0, 24);
-    return { ...r, account, groupLabel, matchedLead };
+    const groupName = r.group_url.replace(/https?:\/\/www\.facebook\.com\/groups\//, "").replace(/\/$/, "");
+    return { ...r, account, groupName, matchedLead };
   });
 
+  /* ── skeleton ── */
   if (loading && replies.length === 0) {
     return (
       <div className="p-8 space-y-6 animate-pulse">
@@ -187,10 +159,11 @@ export default function DashboardPage() {
     );
   }
 
+  /* ─────────────────────────────────────────── JSX ── */
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
 
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">Command Center</h1>
@@ -201,7 +174,7 @@ export default function DashboardPage() {
             onClick={loadData}
             className="flex items-center gap-2 px-5 py-3 text-sm font-bold text-slate-600 hover:text-slate-900 rounded-2xl bg-white border border-slate-200 shadow-sm transition-all"
           >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={16} className={cn(loading && "animate-spin")} />
             Refresh
           </button>
           <button
@@ -215,27 +188,25 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Bot paused warning ── */}
+      {/* Bot paused warning */}
       {!isBotActive && (
         <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3 text-red-700">
           <ShieldAlert className="w-5 h-5 shrink-0" />
-          <div className="text-xs font-semibold">
-            Bot is currently paused. No new comments will be posted until you resume.
-          </div>
+          <div className="text-xs font-semibold">Bot is paused. No new comments will be posted until you resume.</div>
         </div>
       )}
 
-      {/* ── Stat Cards ── */}
+      {/* Stat Cards — exact same as poster */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { icon: BarChart3,    iconClass: "text-blue-600",   bg: "bg-blue-50",   value: stats.totalDispatches,  label: "Total Dispatches"  },
-          { icon: CheckCircle2, iconClass: "text-emerald-500",bg: "bg-emerald-50",value: stats.commentsPosted,   label: "Comments Posted"   },
-          { icon: Users,        iconClass: "text-indigo-600", bg: "bg-indigo-50", value: `${stats.activeProfiles} / 3`, label: "Active Profiles" },
-          { icon: Clock,        iconClass: "text-amber-500",  bg: "bg-amber-50",  value: stats.targetGroups,     label: "Target Groups"     },
-        ].map(({ icon: Icon, iconClass, bg, value, label }) => (
+          { Icon: BarChart3,    bg: "bg-blue-50",   ic: "text-blue-600",   value: stats.totalDispatches,       label: "Total Dispatches"  },
+          { Icon: CheckCircle2, bg: "bg-emerald-50", ic: "text-emerald-500",value: stats.commentsPosted,        label: "Comments Posted"   },
+          { Icon: Users,        bg: "bg-indigo-50",  ic: "text-indigo-600", value: `${stats.activeProfiles} / 3`, label: "Active Profiles" },
+          { Icon: Clock,        bg: "bg-amber-50",   ic: "text-amber-500",  value: stats.targetGroups,          label: "Target Groups"     },
+        ].map(({ Icon, bg, ic, value, label }) => (
           <div key={label} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
-            <div className={`w-12 h-12 ${bg} rounded-2xl flex items-center justify-center shrink-0`}>
-              <Icon size={24} className={iconClass} />
+            <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center shrink-0", bg)}>
+              <Icon size={24} className={ic} />
             </div>
             <div>
               <div className="text-3xl font-black text-slate-900">{value}</div>
@@ -245,7 +216,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* ── Facebook Profile Cookie Status ── */}
+      {/* Cookie Status — exact same as poster */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
         <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
           <Database className="w-4 h-4 text-indigo-500" /> Facebook Profile Cookie Status
@@ -254,7 +225,7 @@ export default function DashboardPage() {
           {PROFILES.map((p) => (
             <div key={p.name} className="border border-slate-100 rounded-2xl p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${p.color}`}>
+                <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center font-bold", p.color)}>
                   {p.initial}
                 </div>
                 <div>
@@ -270,16 +241,16 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Next Scheduled Scan banner ── */}
+      {/* Next Scan banner — exact same as poster */}
       <div className="bg-gradient-to-r from-blue-500 to-indigo-600 rounded-3xl p-6 text-white shadow-lg shadow-blue-500/20">
         <div className="text-[10px] font-bold tracking-widest uppercase opacity-75">Next Scheduled Scan</div>
         <div className="text-2xl font-black mt-1">{nextScan || "Every 30 min · 24/7"}</div>
         <div className="text-xs opacity-75 mt-1">
-          {isBotActive ? "🟢 Bot active — scanning all 85 groups continuously" : "⏸ Bot paused"}
+          {isBotActive ? "🟢 Bot active — scanning all target groups continuously" : "⏸ Bot paused"}
         </div>
       </div>
 
-      {/* ── Recent Post Dispatches table ── */}
+      {/* Recent Post Dispatches table — exact same as poster */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -310,14 +281,10 @@ export default function DashboardPage() {
                 <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-4 py-4 font-bold text-slate-800">{row.account}</td>
                   <td className="px-4 py-4">
-                    <a
-                      href={row.group_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 hover:underline font-medium flex items-center gap-1"
-                    >
-                      <span>{row.groupLabel}</span>
-                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    <a href={row.group_url} target="_blank" rel="noreferrer"
+                      className="text-blue-600 hover:underline font-medium flex items-center gap-1">
+                      <span className="truncate max-w-[180px]">{row.groupName}</span>
+                      <ExternalLink className="w-3 h-3 opacity-60 shrink-0" />
                     </a>
                   </td>
                   <td className="px-4 py-4">
@@ -347,7 +314,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Lead / Proof Modal ── */}
+      {/* Detail Modal — exact same as poster */}
       {selectedLead && (
         <div
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-8"
@@ -365,21 +332,14 @@ export default function DashboardPage() {
               <button
                 onClick={() => setSelectedLead(null)}
                 className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-red-600 font-bold text-lg shadow-md"
-              >
-                ×
-              </button>
+              >×</button>
             </div>
 
             <div>
               <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Target Group URL</label>
-              <a
-                href={selectedLead.group_url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-1 flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-mono"
-              >
-                {selectedLead.group_url}
-                <ExternalLink className="w-3.5 h-3.5" />
+              <a href={selectedLead.group_url} target="_blank" rel="noreferrer"
+                className="mt-1 flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-mono">
+                {selectedLead.group_url} <ExternalLink className="w-3.5 h-3.5" />
               </a>
             </div>
 
@@ -409,7 +369,7 @@ export default function DashboardPage() {
             <div>
               <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-1">
                 <Globe className="w-4 h-4 text-indigo-500" />
-                Account 3 · Website URL Booster (100% Coverage)
+                Account 3 · Website URL Booster (100%)
               </label>
               <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-xs font-mono font-bold text-indigo-900">
                 https://www.fiestafreshcleaning.com/
@@ -417,10 +377,8 @@ export default function DashboardPage() {
             </div>
 
             <div className="pt-2 flex justify-end">
-              <button
-                onClick={() => setSelectedLead(null)}
-                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all"
-              >
+              <button onClick={() => setSelectedLead(null)}
+                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all">
                 Close
               </button>
             </div>
