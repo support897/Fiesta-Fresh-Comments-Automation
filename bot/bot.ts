@@ -630,10 +630,14 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             await randomDelay(2000, 3000);
             console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
 
+            // Grab the current page URL to capture the post permalink
+            const boosterPageUrl = boosterPage.url();
             await supabase.from('replies_log').insert({
                 post_id: postId,
                 group_url: groupUrl,
                 comment_id: `booster_${Date.now()}`,
+                account_name: 'Website Booster',
+                comment_url: boosterPageUrl,
                 replied_at: new Date()
             });
         }
@@ -946,10 +950,14 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await page.keyboard.press('Enter');
                                 await randomDelay(2000, 3000);
                                 
+                                // Capture current page URL as the comment permalink
+                                const commentPageUrl = page.url();
                                 const { error: replyErr } = await supabase.from('replies_log').insert({
                                     post_id: lead.post_id,
                                     group_url: lead.group_url,
                                     comment_id: `comment_${Date.now()}`,
+                                    account_name: fbEmail,
+                                    comment_url: commentPageUrl,
                                     replied_at: new Date()
                                 });
                                 

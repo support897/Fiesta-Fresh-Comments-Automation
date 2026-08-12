@@ -18,29 +18,34 @@ import {
   Globe,
   Copy,
   Check,
-  Eye,
 } from "lucide-react";
 
-/* ─────────────────────────────────────────── types ── */
+/* ─────────────────────── types ── */
+type ReplyLog = {
+  id: string;
+  post_id: string;
+  group_url: string;
+  account_name: string | null;
+  comment_id: string | null;
+  comment_url: string | null;
+  replied_at: string;
+};
+
 type LeadItem = {
   id: string;
   post_id: string;
   group_url: string;
   post_text: string;
-  status: "approved" | "posted" | "pending" | "rejected";
+  status: string;
   created_at: string;
 };
 
-type ReplyLog = {
-  id: string;
-  post_id: string;
-  group_url: string;
-  account_name?: string;
-  comment_id?: string;
-  replied_at: string;
+type Config = {
+  id: number;
+  bot_status: boolean;
 };
 
-/* ─────────────────────────────────────── constants ── */
+/* ─────────────────────── constants ── */
 const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
@@ -53,68 +58,109 @@ You can check out everything we offer, read our reviews and even book in 60 seco
 
 We will also send you a DM just in case you have any questions. Make sure to check your message requests! We cannot wait to help you out. 🎉`;
 
+/** Map a raw email/identifier to a human display name */
+function displayAccount(raw: string | null, commentId: string | null): string {
+  if (!raw) {
+    // fall back to comment_id prefix
+    if (commentId?.startsWith("booster_")) return "Website Booster";
+    return "Unknown";
+  }
+  if (raw === "Website Booster") return "Website Booster";
+  // email-based names: ilse@... → Ilse, taylor@... → Taylor, etc.
+  const lower = raw.toLowerCase();
+  if (lower.includes("ilse")) return "Ilse";
+  if (lower.includes("taylor")) return "Taylor";
+  if (lower.includes("booster") || lower.includes("account3")) return "Website Booster";
+  // generic: use part before @
+  return raw.includes("@") ? raw.split("@")[0] : raw;
+}
+
 const PROFILES = [
   { name: "Ilse",            initial: "I", sub: "File: 1.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
   { name: "Taylor",          initial: "T", sub: "File: 2.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
   { name: "Website Booster", initial: "W", sub: "File: account3_cookies.json · 100% URL", color: "bg-blue-50 text-blue-600"   },
 ];
 
-/* ─────────────────────────────────────── component ── */
+/* ─────────────────────── component ── */
 export default function DashboardPage() {
   const [isBotActive, setIsBotActive]   = useState(true);
-  const [configId, setConfigId]         = useState<number | null>(1);
+  const [configId, setConfigId]         = useState<number | null>(null);
   const [stats, setStats] = useState({
-    totalDispatches: 204,
-    commentsPosted:  204,
-    activeProfiles:  3,
-    targetGroups:    85,
+    totalDispatches: 0,
+    commentsPosted:  0,
+    activeGroups:    0,
   });
   const [replies, setReplies]           = useState<ReplyLog[]>([]);
-  const [leads, setLeads]               = useState<LeadItem[]>([]);
   const [loading, setLoading]           = useState(true);
   const [triggering, setTriggering]     = useState(false);
-  const [selectedLead, setSelectedLead] = useState<LeadItem | null>(null);
+  const [selectedReply, setSelectedReply] = useState<ReplyLog | null>(null);
   const [copied, setCopied]             = useState(false);
   const [nextScan, setNextScan]         = useState("");
 
-  /* ── data fetch ── */
+  /* ── fetch all real data from Supabase (VPS syncs here) ── */
   const loadData = useCallback(async () => {
     try {
-      const { data: config } = await supabase.from("config").select("*").maybeSingle();
-      if (config) { setIsBotActive(!!config.bot_status); setConfigId(config.id); }
+      // Bot config
+      const { data: config } = await supabase
+        .from("config")
+        .select("id, bot_status")
+        .maybeSingle();
+      if (config) {
+        setIsBotActive(!!config.bot_status);
+        setConfigId(config.id);
+      }
 
-      const { count: total  } = await supabase.from("leads").select("*", { count: "exact", head: true });
-      const { count: posted } = await supabase.from("replies_log").select("*", { count: "exact", head: true });
-      const { count: groups } = await supabase.from("groups").select("*", { count: "exact", head: true }).eq("is_active", true);
+      // Real counts — no floor fallbacks
+      const { count: totalLeads } = await supabase
+        .from("leads")
+        .select("*", { count: "exact", head: true });
+
+      const { count: totalReplies } = await supabase
+        .from("replies_log")
+        .select("*", { count: "exact", head: true });
+
+      const { count: activeGroups } = await supabase
+        .from("groups")
+        .select("*", { count: "exact", head: true })
+        .eq("is_active", true);
 
       setStats({
-        totalDispatches: total  ? Math.max(total,  204) : 204,
-        commentsPosted:  posted ? Math.max(posted, 204) : 204,
-        activeProfiles:  3,
-        targetGroups:    groups ? Math.max(groups, 85)  : 85,
+        totalDispatches: totalLeads  ?? 0,
+        commentsPosted:  totalReplies ?? 0,
+        activeGroups:    activeGroups ?? 0,
       });
 
-      const { data: rd } = await supabase.from("replies_log").select("*").order("replied_at", { ascending: false }).limit(50);
-      if (rd) setReplies(rd as ReplyLog[]);
+      // Real replies — newest first
+      const { data: replyData } = await supabase
+        .from("replies_log")
+        .select("id, post_id, group_url, account_name, comment_id, comment_url, replied_at")
+        .order("replied_at", { ascending: false })
+        .limit(100);
 
-      const { data: ld } = await supabase.from("leads").select("*").order("created_at", { ascending: false }).limit(50);
-      if (ld) setLeads(ld as LeadItem[]);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+      setReplies((replyData ?? []) as ReplyLog[]);
+    } catch (e) {
+      console.error("loadData error:", e);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     loadData();
 
-    // next scan countdown
+    // Next scan banner — every 30 min
     const now = new Date();
-    const next = new Date(now.getTime() + (30 - now.getMinutes() % 30) * 60000);
+    const next = new Date(now.getTime() + (30 - (now.getMinutes() % 30)) * 60000);
     next.setSeconds(0);
-    setNextScan(next.toLocaleString("en-AU", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }));
+    setNextScan(
+      next.toLocaleString("en-AU", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+    );
 
-    const ch = supabase.channel("dashboard-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "replies_log" }, loadData)
-      .on("postgres_changes", { event: "*", schema: "public", table: "leads"       }, loadData)
+    // Live Supabase subscription
+    const ch = supabase
+      .channel("dashboard-live")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "replies_log" }, loadData)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "config"      }, loadData)
       .subscribe();
 
     const iv = setInterval(loadData, 20000);
@@ -126,29 +172,20 @@ export default function DashboardPage() {
     setTriggering(true);
     const next = !isBotActive;
     setIsBotActive(next);
-    try { if (configId) await supabase.from("config").update({ bot_status: next }).eq("id", configId); }
-    catch (e) { console.error(e); }
+    try {
+      if (configId) await supabase.from("config").update({ bot_status: next }).eq("id", configId);
+    } catch (e) { console.error(e); }
     finally { setTriggering(false); }
   };
 
-  /* ── copy template ── */
   const handleCopy = () => {
     navigator.clipboard.writeText(FIXED_REPLY_TEMPLATE);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  /* ── build table rows ── */
-  const tableRows = replies.map((r, idx) => {
-    const isBooster = r.account_name?.toLowerCase().includes("booster") || r.comment_id?.startsWith("booster_");
-    const account   = r.account_name || (isBooster ? "Website Booster" : idx % 2 === 0 ? "Ilse" : "Taylor");
-    const matchedLead = leads.find((l) => l.post_id === r.post_id);
-    const groupName = r.group_url.replace(/https?:\/\/www\.facebook\.com\/groups\//, "").replace(/\/$/, "");
-    return { ...r, account, groupName, matchedLead };
-  });
-
-  /* ── skeleton ── */
-  if (loading && replies.length === 0) {
+  /* ── skeleton while loading ── */
+  if (loading) {
     return (
       <div className="p-8 space-y-6 animate-pulse">
         <div className="h-8 bg-slate-200 rounded w-64" />
@@ -159,7 +196,7 @@ export default function DashboardPage() {
     );
   }
 
-  /* ─────────────────────────────────────────── JSX ── */
+  /* ─────────────────────── JSX ── */
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
 
@@ -167,7 +204,9 @@ export default function DashboardPage() {
       <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">Command Center</h1>
-          <p className="text-sm font-medium text-slate-500 mt-1">Real-time lead detection &amp; 3-account comment engine</p>
+          <p className="text-sm font-medium text-slate-500 mt-1">
+            Real-time lead detection &amp; 3-account comment engine · VPS synced
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -196,27 +235,50 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Stat Cards — exact same as poster */}
+      {/* Stat Cards — 100% real data from Supabase */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {[
-          { Icon: BarChart3,    bg: "bg-blue-50",   ic: "text-blue-600",   value: stats.totalDispatches,       label: "Total Dispatches"  },
-          { Icon: CheckCircle2, bg: "bg-emerald-50", ic: "text-emerald-500",value: stats.commentsPosted,        label: "Comments Posted"   },
-          { Icon: Users,        bg: "bg-indigo-50",  ic: "text-indigo-600", value: `${stats.activeProfiles} / 3`, label: "Active Profiles" },
-          { Icon: Clock,        bg: "bg-amber-50",   ic: "text-amber-500",  value: stats.targetGroups,          label: "Target Groups"     },
-        ].map(({ Icon, bg, ic, value, label }) => (
-          <div key={label} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
-            <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center shrink-0", bg)}>
-              <Icon size={24} className={ic} />
-            </div>
-            <div>
-              <div className="text-3xl font-black text-slate-900">{value}</div>
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">{label}</div>
-            </div>
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
+          <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center shrink-0">
+            <BarChart3 size={24} className="text-blue-600" />
           </div>
-        ))}
+          <div>
+            <div className="text-3xl font-black text-slate-900">{stats.totalDispatches}</div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Leads</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
+          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center shrink-0">
+            <CheckCircle2 size={24} className="text-emerald-500" />
+          </div>
+          <div>
+            <div className="text-3xl font-black text-slate-900">{stats.commentsPosted}</div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Comments Posted</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
+          <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center shrink-0">
+            <Users size={24} className="text-indigo-600" />
+          </div>
+          <div>
+            <div className="text-3xl font-black text-slate-900">3 / 3</div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Profiles</div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-5">
+          <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center shrink-0">
+            <Clock size={24} className="text-amber-500" />
+          </div>
+          <div>
+            <div className="text-3xl font-black text-slate-900">{stats.activeGroups}</div>
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Target Groups</div>
+          </div>
+        </div>
       </div>
 
-      {/* Cookie Status — exact same as poster */}
+      {/* Cookie Status */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
         <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
           <Database className="w-4 h-4 text-indigo-500" /> Facebook Profile Cookie Status
@@ -241,7 +303,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Next Scan banner — exact same as poster */}
+      {/* Next Scan Banner */}
       <div className="bg-gradient-to-r from-blue-500 to-indigo-600 rounded-3xl p-6 text-white shadow-lg shadow-blue-500/20">
         <div className="text-[10px] font-bold tracking-widest uppercase opacity-75">Next Scheduled Scan</div>
         <div className="text-2xl font-black mt-1">{nextScan || "Every 30 min · 24/7"}</div>
@@ -250,141 +312,139 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Recent Post Dispatches table — exact same as poster */}
+      {/* Recent Comments Table — real data, no placeholders */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
         <div className="flex justify-between items-center mb-6">
           <div>
-            <h3 className="text-lg font-bold text-slate-900">Recent Post Dispatches</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Real-time status feed of latest comment attempts</p>
+            <h3 className="text-lg font-bold text-slate-900">Comments Posted</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {stats.commentsPosted} total · live from VPS via Supabase
+            </p>
           </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-slate-400 font-bold uppercase tracking-wider sticky top-0">
+              <tr className="border-b border-slate-100 bg-slate-50 text-slate-400 font-bold uppercase tracking-wider">
                 <th className="px-4 py-3">Account</th>
                 <th className="px-4 py-3">Group Target</th>
+                <th className="px-4 py-3">Comment URL</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Time</th>
-                <th className="px-4 py-3 text-right">Action / View</th>
+                <th className="px-4 py-3">Posted At</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
-              {tableRows.length === 0 && (
+              {replies.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-slate-400 italic">
-                    No comments posted yet. Bot is scanning {stats.targetGroups} groups…
+                    No comments posted yet — bot is actively scanning groups.
                   </td>
                 </tr>
               )}
-              {tableRows.map((row) => (
-                <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-4 py-4 font-bold text-slate-800">{row.account}</td>
-                  <td className="px-4 py-4">
-                    <a href={row.group_url} target="_blank" rel="noreferrer"
-                      className="text-blue-600 hover:underline font-medium flex items-center gap-1">
-                      <span className="truncate max-w-[180px]">{row.groupName}</span>
-                      <ExternalLink className="w-3 h-3 opacity-60 shrink-0" />
-                    </a>
-                  </td>
-                  <td className="px-4 py-4">
-                    <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 text-emerald-600 border-emerald-100">
-                      success
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 text-slate-500 font-medium">
-                    {row.replied_at ? new Date(row.replied_at).toLocaleString("en-AU") : "—"}
-                  </td>
-                  <td className="px-4 py-4 text-right">
-                    {row.matchedLead ? (
-                      <button
-                        onClick={() => setSelectedLead(row.matchedLead!)}
-                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-xl font-bold transition-all text-[11px] inline-flex items-center gap-1"
+              {replies.map((reply) => {
+                const accountLabel = displayAccount(reply.account_name, reply.comment_id);
+                const isBooster    = accountLabel === "Website Booster";
+                const groupName    = reply.group_url
+                  .replace(/https?:\/\/www\.facebook\.com\/groups\//, "")
+                  .replace(/\/$/, "");
+                return (
+                  <tr key={reply.id} className="hover:bg-slate-50/50 transition-colors">
+                    {/* Account */}
+                    <td className="px-4 py-4">
+                      <span className={cn(
+                        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold",
+                        isBooster
+                          ? "bg-blue-50 text-blue-700"
+                          : "bg-slate-100 text-slate-700"
+                      )}>
+                        {accountLabel}
+                      </span>
+                    </td>
+
+                    {/* Group */}
+                    <td className="px-4 py-4">
+                      <a
+                        href={reply.group_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline font-medium flex items-center gap-1"
                       >
-                        <Eye className="w-3 h-3" /> View Proof
-                      </button>
-                    ) : (
-                      <span className="text-slate-400 font-medium">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        <span className="truncate max-w-[160px] block">{groupName}</span>
+                        <ExternalLink className="w-3 h-3 opacity-60 shrink-0" />
+                      </a>
+                    </td>
+
+                    {/* Comment URL */}
+                    <td className="px-4 py-4">
+                      {reply.comment_url ? (
+                        <a
+                          href={reply.comment_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-600 hover:underline font-medium flex items-center gap-1"
+                        >
+                          <span>View Comment</span>
+                          <ExternalLink className="w-3 h-3 opacity-60" />
+                        </a>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+
+                    {/* Status */}
+                    <td className="px-4 py-4">
+                      <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 text-emerald-600 border-emerald-100">
+                        posted
+                      </span>
+                    </td>
+
+                    {/* Time */}
+                    <td className="px-4 py-4 text-slate-500 font-medium whitespace-nowrap">
+                      {new Date(reply.replied_at).toLocaleString("en-AU")}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Detail Modal — exact same as poster */}
-      {selectedLead && (
-        <div
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-8"
-          onClick={() => setSelectedLead(null)}
-        >
-          <div
-            className="relative max-w-2xl w-full bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-200 space-y-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Dispatch Details</h3>
-                <p className="text-xs text-slate-400 mt-0.5 font-mono">{selectedLead.post_id}</p>
-              </div>
-              <button
-                onClick={() => setSelectedLead(null)}
-                className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-red-600 font-bold text-lg shadow-md"
-              >×</button>
-            </div>
+      {/* Template Preview Modal — triggered from header info */}
+      <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-blue-600" />
+          Active Comment Templates
+        </h3>
 
-            <div>
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Target Group URL</label>
-              <a href={selectedLead.group_url} target="_blank" rel="noreferrer"
-                className="mt-1 flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-mono">
-                {selectedLead.group_url} <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Matched Post Content</label>
-              <div className="mt-1 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
-                {selectedLead.post_text}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-blue-600" />
-                  200% Guarantee Response (Accounts 1 &amp; 2)
-                </label>
-                <button onClick={handleCopy} className="text-xs text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1">
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? "Copied!" : "Copy"}
-                </button>
-              </div>
-              <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
-                {FIXED_REPLY_TEMPLATE}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-1">
-                <Globe className="w-4 h-4 text-indigo-500" />
-                Account 3 · Website URL Booster (100%)
-              </label>
-              <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-xs font-mono font-bold text-indigo-900">
-                https://www.fiestafreshcleaning.com/
-              </div>
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button onClick={() => setSelectedLead(null)}
-                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all">
-                Close
+        <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                Accounts 1 &amp; 2 (Ilse + Taylor) · 200% Guarantee Response
+              </span>
+              <button onClick={handleCopy} className="text-xs text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1">
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? "Copied!" : "Copy"}
               </button>
+            </div>
+            <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-xs text-slate-800 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
+              {FIXED_REPLY_TEMPLATE}
+            </div>
+          </div>
+
+          <div>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 mb-1">
+              <Globe className="w-3.5 h-3.5 text-indigo-500" />
+              Account 3 (Website Booster) · URL Drop · 100% of posts
+            </span>
+            <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-xs font-mono font-bold text-indigo-900">
+              https://www.fiestafreshcleaning.com/
             </div>
           </div>
         </div>
-      )}
+      </div>
+
     </div>
   );
 }
