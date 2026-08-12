@@ -8,6 +8,26 @@ import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
 import { pipeline, cos_sim } from '@xenova/transformers';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
+import nodemailer from 'nodemailer';
+
+async function sendAlertEmail(subject: string, text: string) {
+    const user = process.env.ALERT_EMAIL;
+    const pass = process.env.ALERT_EMAIL_PASSWORD;
+    if (!user || !pass) return;
+    
+    try {
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user, pass }
+        });
+        await transporter.sendMail({ from: user, to: user, subject, text });
+        console.log(`📧 Alert email sent: ${subject}`);
+    } catch (e: any) {
+        console.error("⚠️ Failed to send alert email:", e.message);
+    }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -263,13 +283,8 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
         }
     }
     
-    // Check approve keywords
-    for (const keyword of APPROVE_KEYWORDS) {
-        if (lowerText.includes(keyword.toLowerCase())) {
-            console.log(`✅ Quick APPROVE - keyword: "${keyword}"`);
-            return 'approve';
-        }
-    }
+    // We intentionally removed the quick approve filter.
+    // ALL non-rejected posts MUST be evaluated by the AI for true 100% accuracy.
     
     console.log("🤔 Unsure - sending to AI evaluation");
     return 'unsure';
@@ -345,9 +360,87 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
 }
 
 /**
- * Lead Evaluator (local semantic search - no API key needed)
+ * Lead Evaluator (Gemini API with fallback to Groq, then local semantic search)
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
+    const prompt = `You are an AI lead classifier for a residential cleaning business.
+Your goal is to determine with 100% accuracy if a Facebook post is from a potential customer looking to hire a cleaner.
+
+STRICT RULES:
+1. ONLY return true if they are explicitly asking to hire a cleaner for a residential home, house, or apartment.
+2. Return false if they are OFFERING cleaning services.
+3. Return false if they want car detailing, pool cleaning, commercial/warehouse cleaning, gardening, or any other non-residential house cleaning.
+4. Return false if they are just asking for a product recommendation.
+
+EXAMPLES (Few-Shot):
+Post: "I am looking for a bond clean on Friday."
+Output: {"is_lead": true, "reason": "Customer is asking to hire a cleaner for a residential bond clean."}
+
+Post: "I am a reliable cleaner with 5 years experience looking for more clients."
+Output: {"is_lead": false, "reason": "The user is offering cleaning services, not looking to hire."}
+
+Post: "Can anyone recommend a good pool cleaner?"
+Output: {"is_lead": false, "reason": "They are looking for a pool cleaner, not a house cleaner."}
+
+Post text to evaluate:
+"""
+${postText}
+"""
+
+You must respond in valid JSON format only, exactly like this:
+{"is_lead": true, "reason": "brief explanation"}`;
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (geminiKey && geminiKey.trim().length > 0 && geminiKey !== "your_gemini_api_key_here") {
+        try {
+            console.log("🧠 Evaluating post with Gemini 1.5 Flash...");
+            const genAI = new GoogleGenerativeAI(geminiKey);
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            
+            const result = await model.generateContent(prompt);
+            const responseText = result.response.text();
+            
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                console.log(`🤖 Gemini Output: ${parsed.is_lead ? '✅ LEAD' : '❌ NOT LEAD'} (${parsed.reason})`);
+                return parsed.is_lead === true;
+            }
+        } catch (e: any) {
+            console.error("⚠️ Gemini API evaluation failed. Cascading to Groq...", e.message);
+        }
+    } else {
+        console.log("⚠️ GEMINI_API_KEY not found or invalid. Cascading to Groq...");
+    }
+    
+    const groqKey = process.env.GROQ_API_KEY;
+    if (groqKey && groqKey.trim().length > 0 && groqKey !== "your_groq_api_key_here") {
+        try {
+            console.log("🧠 Evaluating post with Groq (LLaMA 3)...");
+            const groq = new Groq({ apiKey: groqKey });
+            
+            const chatCompletion = await groq.chat.completions.create({
+                messages: [{ role: 'user', content: prompt }],
+                model: 'llama3-8b-8192',
+                response_format: { type: 'json_object' }
+            });
+            
+            const responseText = chatCompletion.choices[0]?.message?.content || "";
+            const parsed = JSON.parse(responseText);
+            console.log(`🤖 Groq Output: ${parsed.is_lead ? '✅ LEAD' : '❌ NOT LEAD'} (${parsed.reason})`);
+            return parsed.is_lead === true;
+        } catch (e: any) {
+            console.error("⚠️ Groq API evaluation failed. Cascading to local semantic search...", e.message);
+        }
+    } else {
+        console.log("⚠️ GROQ_API_KEY not found or invalid. Cascading to local semantic search...");
+    }
+    
+    await sendAlertEmail(
+        "Fiesta Fresh AI Degradation",
+        "Both Gemini and Groq API layers failed or are unconfigured. The bot has fallen back to the less accurate local semantic search."
+    );
+
     return await evaluateWithSemanticSearch(postText);
 }
 
@@ -519,8 +612,8 @@ async function runBot() {
         
         // PHASE 1: Execute approved leads
         const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
-        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true).single();
-        const templateText = templates?.content || `Hi! 💙 We would absolutely love to help you out!
+        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true);
+        const defaultTemplateText = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
 
@@ -536,6 +629,13 @@ We will also send you a DM just in case you have any questions. Make sure to che
             console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
             for (const lead of approvedLeads) {
                 console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
+                
+                // Pick a random template
+                let templateText = defaultTemplateText;
+                if (templates && templates.length > 0) {
+                    const randomIdx = Math.floor(Math.random() * templates.length);
+                    templateText = templates[randomIdx].content;
+                }
                 
                 if (DRY_RUN) {
                     console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
@@ -724,9 +824,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         }
 
                         if (DRY_RUN) {
-                            console.log(`[DRY RUN] Would queue lead: ${postText.substring(0, 60)}...`);
+                            console.log(`[DRY RUN] Would queue/comment on lead: ${postText.substring(0, 60)}...`);
                             continue;
                         }
+
+                        console.log("🎯 Found valid lead! Queuing as pending...");
 
                         const { error: insertError } = await supabase.from('leads').insert({
                             post_id: postID,
@@ -742,7 +844,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 console.error("❌ Failed to queue lead:", insertError.message);
                             }
                         } else {
-                            console.log("✅ Lead queued for review.");
+                            console.log(`✅ Lead logged as pending.`);
                         }
                     }
                     
