@@ -900,8 +900,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 if (page.url().includes('/login/')) {
                     consecutiveLoginRedirects++;
                     console.warn(`⚠️ Group ${group.url} redirected to login page (count: ${consecutiveLoginRedirects}). Skipping...`);
-                    if (consecutiveLoginRedirects >= 3) {
-                        console.error("🚨 3 consecutive groups redirected to /login/. Session lost. Aborting patrol.");
+                    if (consecutiveLoginRedirects >= 6) {
+                        console.error("🚨 6 consecutive groups redirected to /login/. Session lost. Aborting patrol.");
                         const proofUrl = await captureProof(page, 'session_lost_login');
 
                         if (!sessionAlertSent) {
