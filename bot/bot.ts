@@ -465,7 +465,53 @@ You must respond in valid JSON format only:
         "Both Gemini and Groq API layers failed or are unconfigured. The bot has fallen back to the less accurate local semantic search."
     );
 
-    return await evaluateWithSemanticSearch(postText);
+async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId: string) {
+    console.log("🌐 Triggering Account 3 Website URL Booster comment (100% Coverage)...");
+    try {
+        const { data: session } = await supabase
+            .from('sessions')
+            .select('cookies')
+            .eq('user_email', 'account3_booster@fiestafresh.com')
+            .maybeSingle();
+
+        if (!session || !session.cookies) {
+            console.warn("⚠️ Account 3 booster session not found in Supabase. Please prime Account 3.");
+            return;
+        }
+
+        const boosterContext = await browser.newContext({
+            viewport: { width: 1280, height: 900 },
+            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        });
+        await boosterContext.addCookies(session.cookies);
+
+        const boosterPage = await boosterContext.newPage();
+        await boosterPage.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await randomDelay(3000, 5000);
+
+        const boosterCommentText = "You can check out our website, read our reviews and even book in 60 seconds right here 👉 fiestafreshcleaning.com/book 🏡✨";
+
+        const commentBox = boosterPage.locator('[aria-label="Write a comment"], [role="textbox"]').first();
+        if (await commentBox.isVisible({ timeout: 4000 })) {
+            await commentBox.click();
+            await randomDelay(800, 1500);
+            await humanType(boosterPage, '[role="textbox"]:focus', boosterCommentText);
+            await randomDelay(500, 1000);
+            await boosterPage.keyboard.press('Enter');
+            await randomDelay(2000, 3000);
+            console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
+
+            await supabase.from('replies_log').insert({
+                post_id: postId,
+                group_url: groupUrl,
+                comment_id: `booster_${Date.now()}`,
+                replied_at: new Date()
+            });
+        }
+        await boosterContext.close();
+    } catch (e: any) {
+        console.error("⚠️ Failed Account 3 booster comment:", e.message);
+    }
 }
 
 async function runBot() {
@@ -960,6 +1006,10 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             }
                         } else {
                             console.log(`✅ Lead logged as ${commented ? 'posted' : 'approved'}.`);
+                        if (commented) {
+                            console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
+                            await randomDelay(4000, 6000);
+                            await postWebsiteUrlBoosterReply(browser, group.url, postID);
                         }
                     }
                     
