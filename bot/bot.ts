@@ -886,11 +886,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                 let previousPostCount = 0;
                 let currentScrolls = 0;
-                const MAX_SCROLLS = 2; // How many times to scroll down (keeps DOM/memory low)
+                const MAX_SCROLLS = 10; // Scroll deep enough to capture all posts within last 2 days (48h)
 
                 while (currentScrolls < MAX_SCROLLS) {
-                    await page.mouse.wheel(0, 5000); // Scroll down a significant amount
-                    await randomDelay(3000, 5000); // Wait for content to load
+                    await page.mouse.wheel(0, 5000); // Scroll down to load historical posts
+                    await randomDelay(2500, 4500); // Wait for post items to render
 
                     const tempPostCount = await posts.count();
                     if (tempPostCount === previousPostCount) {
@@ -902,9 +902,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     console.log(`    Scrolled ${currentScrolls}/${MAX_SCROLLS} times. Now visible: ${previousPostCount} posts.`);
                 }
                 
-                // Now process all visible posts after scrolling
+                // Process all posts visible within the last 2 days (48 hours)
                 const finalPostCount = await posts.count();
-                console.log(`    Processing up to ${finalPostCount} posts in this group.`);
+                console.log(`    Processing up to ${finalPostCount} posts within last 2 days in this group.`);
                 for (let i = 0; i < finalPostCount; i++) {
                     const post = posts.nth(i);
                     let postText: string;
@@ -912,6 +912,13 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         postText = (await post.innerText({ timeout: 10000 })).trim();
                     } catch (e) {
                         console.warn(`    ⚠️ Could not read post text (${e instanceof Error ? e.message.split('\n')[0] : e}) - skipping.`);
+                        continue;
+                    }
+
+                    // Check post age — filter out posts older than 2 days (e.g. 3d, 4d, 1w)
+                    const lowerText = postText.toLowerCase();
+                    if (/\b[3-9]d\b/.test(lowerText) || /\b\d{2,}d\b/.test(lowerText) || /\b\d+w\b/.test(lowerText)) {
+                        console.log(`    ⏩ Skipping post older than 2 days (48h).`);
                         continue;
                     }
 
