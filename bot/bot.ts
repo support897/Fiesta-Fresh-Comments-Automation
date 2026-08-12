@@ -789,81 +789,86 @@ We will also send you a DM just in case you have any questions. Make sure to che
         if (approvedLeads && approvedLeads.length > 0) {
             console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
             for (const lead of approvedLeads) {
-                console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
-                
-                // Always use exact fixed reply template - zero variations
-                const templateText = FIXED_REPLY_TEMPLATE;
-                
-                if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
-                    console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
-                    continue;
-                }
-                
-                if (DRY_RUN) {
-                    console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
-                    console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
-                    await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                    continue;
-                }
-                
-                await page.goto(lead.group_url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                await randomDelay(2000, 4000);
-                
-                // Scroll to find post
-                for (let scroll = 0; scroll < 5; scroll++) {
-                    await page.mouse.wheel(0, 1000);
-                    await randomDelay(1500, 3000);
-                    const posts = page.locator('[data-ad-preview="message"], [role="article"]');
-                    let count = await posts.count();
-                    if (count === 0) {
-                        // Fallback selector for posts container
-                        count = await page.locator('div[role="feed"] > div').count();
+                try {
+                    console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
+                    
+                    // Always use exact fixed reply template - zero variations
+                    const templateText = FIXED_REPLY_TEMPLATE;
+                    
+                    if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
+                        console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
+                        continue;
                     }
-                    let found = false;
+                    
+                    if (DRY_RUN) {
+                        console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
+                        console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
+                        await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
+                        continue;
+                    }
+                    
+                    await page.goto(lead.group_url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    await randomDelay(2000, 4000);
+                    
+                    // Scroll to find post
+                    for (let scroll = 0; scroll < 5; scroll++) {
+                        await page.mouse.wheel(0, 1000);
+                        await randomDelay(1500, 3000);
+                        const posts = page.locator('[data-ad-preview="message"], [role="article"]');
+                        let count = await posts.count();
+                        if (count === 0) {
+                            // Fallback selector for posts container
+                            count = await page.locator('div[role="feed"] > div').count();
+                        }
+                        let found = false;
 
-                    for (let i = 0; i < count; i++) {
-                        const postText = (await posts.nth(i).innerText()).trim();
-                        const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
-                        const targetSnippet = norm(lead.post_text).slice(0, 35);
-                        
-                        if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
-                            console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
-                            await closeOverlays(page);
+                        for (let i = 0; i < count; i++) {
+                            const postText = (await posts.nth(i).innerText()).trim();
+                            const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
+                            const targetSnippet = norm(lead.post_text).slice(0, 35);
                             
-                            let commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
-                            if (!(await commentBox.isVisible())) {
-                                const commentBtn = posts.nth(i).locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
-                                if (await commentBtn.isVisible()) {
-                                    await commentBtn.click();
+                            if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
+                                console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
+                                await closeOverlays(page);
+                                
+                                let commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                                if (!(await commentBox.isVisible())) {
+                                    const commentBtn = posts.nth(i).locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
+                                    if (await commentBtn.isVisible()) {
+                                        await commentBtn.click();
+                                        await randomDelay(800, 1500);
+                                        commentBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
+                                    }
+                                }
+                                
+                                if (await commentBox.isVisible()) {
+                                    await randomDelay(1000, 2000);
+                                    await commentBox.click();
                                     await randomDelay(800, 1500);
-                                    commentBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
+                                    await humanType(page, '[role="textbox"]:focus', templateText);
+                                    await randomDelay(500, 1000);
+                                    await page.keyboard.press('Enter');
+                                    await randomDelay(2000, 3000);
+                                    
+                                    await supabase.from('replies_log').insert({
+                                        post_id: lead.post_id,
+                                        group_url: lead.group_url,
+                                        comment_id: `comment_${Date.now()}`,
+                                        replied_at: new Date()
+                                    });
+                                    
+                                    await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
+                                    console.log("✅ Comment posted and logged.");
+                                    found = true;
+                                    break;
                                 }
                             }
-                            
-                            if (await commentBox.isVisible()) {
-                                await randomDelay(1000, 2000);
-                                await commentBox.click();
-                                await randomDelay(800, 1500);
-                                await humanType(page, '[role="textbox"]:focus', templateText);
-                                await randomDelay(500, 1000);
-                                await page.keyboard.press('Enter');
-                                await randomDelay(2000, 3000);
-                                
-                                await supabase.from('replies_log').insert({
-                                    post_id: lead.post_id,
-                                    group_url: lead.group_url,
-                                    comment_id: `comment_${Date.now()}`,
-                                    replied_at: new Date()
-                                });
-                                
-                                await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                                console.log("✅ Comment posted and logged.");
-                                found = true;
-                                break;
-                            }
                         }
+                        if (found) break;
                     }
-                    if (found) break;
+                } catch (leadErr: any) {
+                    console.warn(`⚠️ Skipping lead ${lead.post_id} due to navigation/execution error: ${leadErr.message?.slice(0, 100)}`);
+                    continue;
                 }
             }
         }
