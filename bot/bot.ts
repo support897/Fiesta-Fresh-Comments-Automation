@@ -465,7 +465,10 @@ You must respond in valid JSON format only:
         "Both Gemini and Groq API layers failed or are unconfigured. The bot has fallen back to the less accurate local semantic search."
     );
 
-async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId: string) {
+    return await evaluateWithSemanticSearch(postText);
+}
+
+async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
     console.log("🌐 Triggering Account 3 Website URL Booster comment (100% Coverage)...");
     try {
         const { data: session } = await supabase
@@ -488,7 +491,11 @@ async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId
             return;
         }
 
-        const boosterContext = await browser.newContext({
+        const boosterBrowser = await chromium.launch({
+            headless: true,
+            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+        });
+        const boosterContext = await boosterBrowser.newContext({
             viewport: { width: 1280, height: 900 },
             userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         });
@@ -518,6 +525,7 @@ async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId
             });
         }
         await boosterContext.close();
+        await boosterBrowser.close();
     } catch (e: any) {
         console.error("⚠️ Failed Account 3 booster comment:", e.message);
     }
@@ -1015,10 +1023,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             }
                         } else {
                             console.log(`✅ Lead logged as ${commented ? 'posted' : 'approved'}.`);
+                        }
                         if (commented) {
                             console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
                             await randomDelay(4000, 6000);
-                            await postWebsiteUrlBoosterReply(browser, group.url, postID);
+                            await postWebsiteUrlBoosterReply(group.url, postID);
                         }
                     }
                     
