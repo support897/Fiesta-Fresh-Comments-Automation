@@ -800,10 +800,24 @@ We will also send you a DM just in case you have any questions. Make sure to che
         // PHASE 2: Scrape groups for new posts
         console.log("🔍 Starting group patrol...");
 
-        const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
+        let groupsToScan: { url: string }[] = [];
+        try {
+            const fs = await import('fs');
+            const targetFile = path.join(__dirname, 'target_groups.json');
+            if (fs.existsSync(targetFile)) {
+                const rawUrls: string[] = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
+                groupsToScan = rawUrls.map(url => ({ url }));
+                console.log(`📋 Loaded ${groupsToScan.length} target groups from target_groups.json`);
+            }
+        } catch {}
 
-        if (groups) {
-            for (const group of groups) {
+        if (groupsToScan.length === 0) {
+            const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
+            if (groups) groupsToScan = groups;
+        }
+
+        if (groupsToScan.length > 0) {
+            for (const group of groupsToScan) {
                 console.log(`\n📡 Scanning: ${group.url}`);
                 try {
                     try {

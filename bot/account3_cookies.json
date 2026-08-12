@@ -1,0 +1,62 @@
+[
+  {
+    "name": "datr",
+    "value": "shN8ak-5-q2yy1ZeWIN1Sghi",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": 1821076403.107092,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "fr",
+    "value": "0jwtoPO29NBf3msgb..BqfBOy..AAA.0.0.BqfBOy.AWeBZSM26525O-G3_NT-ERKH-vQ",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": 1794292403.107212,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "sb",
+    "value": "shN8aq7HJxe5PmiCtcs9Mn65",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": 1821076403.107249,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "wd",
+    "value": "1440x732",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": 1787121204,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "checkpoint",
+    "value": "%7B%22u%22%3A1065340079%2C%22t%22%3A1786516475%2C%22step%22%3A0%2C%22n%22%3A%228JkcX79B1J8%3D%22%2C%22inst%22%3A10238317893580629%2C%22f%22%3A193593390684083%2C%22st%22%3A%22c%22%2C%22aid%22%3Anull%2C%22ca%22%3Anull%2C%22la%22%3A%22%22%2C%22ta%22%3A%221786516478.ch.s%3An619%3Apw.9zBFAiBMRQHFdML4zphpt0uYtJtI2HEFNR8Lo7HSyFRVdJ96TAIhAMn0vrMh_LMi6OB06aTU5QNpjIsRtdETztUsgcqqpKLS%22%2C%22tfvaid%22%3Anull%2C%22tfvasec%22%3Anull%2C%22sat%22%3Anull%2C%22idg%22%3Afalse%2C%22cidue%22%3A%22%22%2C%22tfuln%22%3Anull%2C%22tfvri%22%3Anull%2C%22ct%22%3Anull%2C%22aads%22%3Anull%2C%22s%22%3A%22AWYl-rpG1EHt3mgeedA%22%2C%22cs%22%3A%5B%5D%2C%22ssp%22%3A1%7D",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "locale",
+    "value": "en_US",
+    "domain": ".facebook.com",
+    "path": "/",
+    "expires": 1787121280.193326,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  }
+]
