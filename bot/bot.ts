@@ -32,11 +32,12 @@ async function sendAlertEmail(subject: string, text: string) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables
+// Load environment variables with fallback paths
 dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.SUPABASE_URL || 'https://xbqkcjobdnrbetrgjjrd.supabase.co';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_UWbZXjdMsf_Ikp2LtPRWyA_85Wop9Xg';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
@@ -546,12 +547,17 @@ async function runBot() {
     console.log(`👤 Account: ${fbEmail}`);
 
     // 1. Check Config
-    const { data: config, error: configErr } = await supabase.from('config').select('*').single();
-    if (configErr) {
-        console.log(`⚠️ Config read error (${configErr.code || configErr.message}). Retrying later...`);
-        return;
+    let botActive = true;
+    try {
+        const { data: config } = await supabase.from('config').select('bot_status').maybeSingle();
+        if (config && config.bot_status === false) {
+            botActive = false;
+        }
+    } catch (e: any) {
+        console.log(`⚠️ Config check fallback to active: ${e.message}`);
     }
-    if (!config || !config.bot_status) {
+
+    if (!botActive) {
         console.log("⏸️ Bot is paused in Supabase config. Waiting...");
         return;
     }
@@ -1093,6 +1099,8 @@ async function main() {
             config: cfg ?? null,
             keyFp: k.length ? `${k.slice(0, 8)}...${k.slice(-6)} (len ${k.length})` : '(missing)',
         }));
+    }).on('error', (err: any) => {
+        console.log(`⚠️ Health check server note (${err.message}) - continuing main bot process...`);
     }).listen(PORT, () => {
         console.log(`❤️ Health check server listening on port ${PORT}`);
     });
