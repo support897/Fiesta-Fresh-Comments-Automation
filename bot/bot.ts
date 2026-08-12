@@ -345,7 +345,7 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
         console.log("🧠 Running local Semantic Search Fallback...");
         const extract = await getExtractor();
         
-        const idealLead = "I am looking to hire a professional cleaner for a house, residential home, office, or commercial space.";
+        const idealLead = "I am looking to hire a professional cleaner or asking for cleaner recommendations for house, home, bond, end of lease, commercial, office, or carpet cleaning.";
         
         const postOutput = await extract(postText, { pooling: 'mean', normalize: true });
         const idealOutput = await extract(idealLead, { pooling: 'mean', normalize: true });
@@ -364,38 +364,46 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
  * Lead Evaluator (Gemini API with fallback to Groq, then local semantic search)
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
-    const prompt = `You are an AI lead classifier for a cleaning business (offering residential house cleaning, bond/end of lease cleaning, deep cleaning, commercial cleaning, office cleaning).
-Your goal is to determine with 100% accuracy if a Facebook post is from a potential customer looking to hire a cleaner or asking for cleaner recommendations.
+    const prompt = `You are an expert AI lead classifier for a professional cleaning company offering ALL types of cleaning services (house/residential, bond/end of lease/vacate, commercial/office, carpet/steam/upholstery, deep clean, Airbnb turnover, window & tile cleaning).
+Your goal is to determine with 100% accuracy if a Facebook post or comment is from someone looking for a cleaner, asking for cleaner recommendations, or inquiring about cleaning services.
 
-MATCH CRITERIA (Return true for is_lead):
-1. DIRECT HIRE: Person explicitly looking to hire a cleaner ("Need a cleaner for Friday", "Looking for a bond clean in Gold Coast", "Who can clean my office?").
-2. RECOMMENDATION REQUESTS: Person asking the community for cleaner recommendations ("Can anyone recommend a good cleaner?", "Any reliable house cleaners near Southport?", "Looking for recommendations for an office clean", "Who is the best cleaner around?").
-3. PRICE / QUOTE INQUIRIES: Person asking about cost/rates for cleaning services ("How much for a 3 bedroom end of lease clean?", "Looking for quotes for domestic cleaning").
-4. ALL CLEANING TYPES: Residential home/house/apartment, bond/vacate, spring clean, carpet clean, window clean, office clean, commercial space.
+SUPPORTED CLEANING CATEGORIES (Return TRUE for any of these):
+- House / Home / Residential / Domestic / Apartment / Unit / Townhouse Cleaning
+- Bond Clean / End of Lease / Vacate Clean / Move-out / Move-in Cleaning
+- Commercial Clean / Office Clean / Shop / Business Premises / Studio Cleaning
+- Carpet Cleaning / Carpet Steam Clean / Rug Clean / Couch & Upholstery Cleaning
+- Deep Clean / Spring Clean / Regular Clean / One-off Clean / Airbnb Turnover
+- Window Clean / Tile & Grout Clean / Oven Clean
 
-DISQUALIFY CRITERIA (Return false for is_lead):
-1. SERVICE SELLERS: Person offering or advertising cleaning services ("I am a cleaner available...", "Offering cleaning services...", "DM me for bookings", "We are a local cleaning company").
-2. NON-CLEANING TRADES: Requests for car detailing/car wash, pool cleaning, gardening, lawn mowing, plumbing, electrical, handyman, moving/removalist.
-3. PRODUCT / DIY INQUIRIES: Asking how to clean a stain themselves or asking for cleaning product recommendations ("What's the best product to clean oven?", "How do I remove mold from grout?").
+ACCEPTED PHRASING & INTENT VARIATIONS (Return TRUE for any of these):
+1. RECOMMENDATIONS & SUGGESTIONS: "Can anyone recommend...", "Looking for recommendations for...", "Who do you guys use for...", "Best cleaner on Gold Coast?", "Tag your favorite cleaner", "Suggestions for a good carpet cleaner?"
+2. DIRECT HIRE & SEARCH: "Looking for a cleaner", "Need a bond clean", "Searching for someone to clean my office", "Urgent cleaner needed", "Want to hire a cleaner"
+3. QUOTE & PRICE INQUIRIES: "How much for a 3 bed bond clean?", "Rates for weekly house cleaning?", "Quote for carpet steam cleaning"
+4. AVAILABILITY QUERIES: "Any cleaners free this Friday?", "Who is available for a deep clean next week?"
+
+DISQUALIFY CRITERIA (Return FALSE only for these):
+1. SERVICE SELLERS / ADVERTISERS: Person offering, advertising, or selling cleaning services ("I am a cleaner available...", "Offering cleaning services...", "DM me for bookings", "We are a local cleaning business").
+2. NON-CLEANING TRADES: Requests for car wash/detailing, pool maintenance, gardening/lawn mowing, plumbing, electrical, handyman, painter, moving/removalist.
+3. DIY / PRODUCT QUESTIONS: Asking how to clean something themselves or asking for product recommendations ("What product removes mold?", "How do I get stain out of couch myself?").
 
 EXAMPLES (Few-Shot):
 Post: "Can anyone recommend a reliable house cleaner near Robina?"
-Output: {"is_lead": true, "reason": "Asking community for house cleaner recommendations."}
+Output: {"is_lead": true, "reason": "Asking for house cleaner recommendations."}
 
-Post: "I need a bond clean done this Thursday in Southport. 3 beds 2 baths."
-Output: {"is_lead": true, "reason": "Direct request to hire a bond cleaner."}
+Post: "I need a bond clean + carpet steam clean done this Thursday in Southport."
+Output: {"is_lead": true, "reason": "Direct request for bond + carpet cleaning."}
 
-Post: "Looking for recommendations for a reliable commercial cleaner for our office in Southport twice a week."
-Output: {"is_lead": true, "reason": "Asking for recommendations for an office/commercial cleaner."}
+Post: "Looking for recommendations for a reliable commercial cleaner for our office in Southport."
+Output: {"is_lead": true, "reason": "Asking for commercial/office cleaner recommendations."}
 
-Post: "I am an experienced domestic cleaner with openings available this week! PM for rates."
+Post: "Who does good carpet and couch steam cleaning on the Gold Coast?"
+Output: {"is_lead": true, "reason": "Asking for carpet/upholstery cleaning recommendations."}
+
+Post: "I am an experienced domestic cleaner with openings available this week!"
 Output: {"is_lead": false, "reason": "User is offering cleaning services, not looking to hire."}
 
-Post: "What is the best spray to remove mold from bathroom tiles?"
-Output: {"is_lead": false, "reason": "Product/DIY question, not looking to hire a service."}
-
 Post: "Can anyone recommend a good car detailer?"
-Output: {"is_lead": false, "reason": "Looking for car detailing, not house or office cleaning."}
+Output: {"is_lead": false, "reason": "Looking for car detailing trade, not house/office/carpet cleaning."}
 
 Post text to evaluate:
 """
