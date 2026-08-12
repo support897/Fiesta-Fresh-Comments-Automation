@@ -901,6 +901,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 proofUrl = await captureProof(page, 'login_failed');
             }
 
+            // Sync 'Down' status to database by setting cookies to empty array
+            console.log(`📡 Syncing cookies status to 'Down' in Supabase for ${fbEmail}...`);
+            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: [], updated_at: new Date() }).catch((err) => {
+                console.error(`⚠️ Failed to sync Down status to database: ${err.message}`);
+            });
+
             // Send JUST ONE email alert per failure incident until session is restored
             if (!sessionAlertSent) {
                 sessionAlertSent = true;
