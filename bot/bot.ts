@@ -877,6 +877,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
             if (groups) groupsToScan = groups;
         }
 
+        let consecutiveLoginRedirects = 0;
         if (groupsToScan.length > 0) {
             for (const group of groupsToScan) {
                 console.log(`\n📡 Scanning: ${group.url}`);
@@ -895,30 +896,31 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 }
                 await randomDelay(2000, 4000);
 
-                // Human-like pacing — Facebook kills sessions on fast request bursts
-                // (datacenter IP + rapid group loads triggered the risk engine). Keep
-                // several seconds of quiet time between group navigations.
-                await randomDelay(4000, 8000);
-
-                // Detect session loss: FB redirects group pages to /login/ when the
-                // session dies mid-patrol. Stop early instead of scanning logged-out.
+                // Detect session loss vs inaccessible group
                 if (page.url().includes('/login/')) {
-                    console.error("🚨 Session invalidated by Facebook (group redirected to /login/). Aborting patrol early.");
-                    const proofUrl = await captureProof(page, 'session_lost_login');
+                    consecutiveLoginRedirects++;
+                    console.warn(`⚠️ Group ${group.url} redirected to login page (count: ${consecutiveLoginRedirects}). Skipping...`);
+                    if (consecutiveLoginRedirects >= 3) {
+                        console.error("🚨 3 consecutive groups redirected to /login/. Session lost. Aborting patrol.");
+                        const proofUrl = await captureProof(page, 'session_lost_login');
 
-                    if (!sessionAlertSent) {
-                        sessionAlertSent = true;
-                        await sendAlertEmail(
-                            `🚨 Fiesta Fresh Bot Alert: Facebook Session Disconnected (${fbEmail})`,
-                            `Facebook session for ${fbEmail} expired during group patrol (redirected to /login/).\n\n` +
-                            `${proofUrl ? `Proof Screenshot: ${proofUrl}\n` : ''}\n` +
-                            `Action Required: Run \`npx tsx prime-session.ts\` or \`npx tsx refresh-session.ts\` to log in and refresh session cookies.\n\n` +
-                            `(Note: This is a single email alert.)`
-                        );
+                        if (!sessionAlertSent) {
+                            sessionAlertSent = true;
+                            await sendAlertEmail(
+                                `🚨 Fiesta Fresh Bot Alert: Facebook Session Disconnected (${fbEmail})`,
+                                `Facebook session for ${fbEmail} expired during group patrol (3 consecutive redirects to /login/).\n\n` +
+                                `${proofUrl ? `Proof Screenshot: ${proofUrl}\n` : ''}\n` +
+                                `Action Required: Run \`npx tsx prime-session.ts\` or \`npx tsx refresh-session.ts\` to log in and refresh session cookies.\n\n` +
+                                `(Note: This is a single email alert.)`
+                            );
+                        }
+                        return false;
                     }
-
-                    return false;
+                    continue;
                 }
+                
+                // Reset counter on successful group load
+                consecutiveLoginRedirects = 0;
 
                 // Switch to Discussion if Buy/Sell layout
                 const discussionTab = page.locator('span:has-text("Discussion")').first();
