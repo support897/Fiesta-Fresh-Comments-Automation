@@ -1,12 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://xbqkcjobdnrbetrgjjrd.supabase.co';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_UWbZXjdMsf_Ikp2LtPRWyA_85Wop9Xg';
 
-export const isConfigured = !!(supabaseUrl && supabaseUrl.startsWith('http') && supabaseKey);
+export const isConfigured = true;
 
-// Fallback to placeholder values to prevent module initialization crashes
-const safeUrl = isConfigured ? supabaseUrl : 'https://placeholder.supabase.co';
-const safeKey = isConfigured ? supabaseKey : 'placeholder-key';
-
-export const supabase = createClient(safeUrl, safeKey);
+export const supabase = createClient(supabaseUrl, supabaseKey);

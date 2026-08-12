@@ -15,7 +15,7 @@ type GroupItem = {
 export default function FacebookGroupsManager() {
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [newGroupUrl, setNewGroupUrl] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {

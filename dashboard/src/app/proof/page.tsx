@@ -12,7 +12,7 @@ type ProofFile = {
 
 export default function ProofGallery() {
   const [proofs, setProofs] = useState<ProofFile[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchProofs();
