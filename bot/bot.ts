@@ -808,6 +808,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     }
                     
                     await page.goto(lead.group_url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 10000 }).catch(() => {});
                     await randomDelay(2000, 4000);
                     
                     // Scroll to find post
