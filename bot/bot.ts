@@ -794,6 +794,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 // Always use exact fixed reply template - zero variations
                 const templateText = FIXED_REPLY_TEMPLATE;
                 
+                if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
+                    console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
+                    continue;
+                }
+                
                 if (DRY_RUN) {
                     console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
                     console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
