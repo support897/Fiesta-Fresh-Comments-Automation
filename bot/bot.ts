@@ -68,6 +68,7 @@ function loadAccounts(): FbAccount[] {
 
 const ACCOUNTS = loadAccounts();
 let currentAccountIndex = 0;
+let sessionAlertSent = false;
 
 function nextAccount(): FbAccount | null {
     if (ACCOUNTS.length === 0) return null;
@@ -617,18 +618,42 @@ async function runBot() {
         }
         if (!isLogged) {
             const hasCaptcha = currentUrl.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
+            let proofUrl: string | null = null;
+            let failureReason = 'Login verification failed / Cookies expired';
+
             if (hasCaptcha) {
                 console.error("🚫 Facebook risk challenge detected (reCAPTCHA). A human must prime the session once: run `npx tsx prime-session.ts`, solve the captcha in the visible Chrome window, then cookies are saved for the bot to reuse.");
-                await captureProof(page, 'recaptcha_challenge');
+                proofUrl = await captureProof(page, 'recaptcha_challenge');
+                failureReason = 'Facebook reCAPTCHA / Security Challenge detected';
             } else if (checkpointVisible) {
                 console.error("🚨 Session invalidated by Facebook (\"Continue as\" checkpoint). A human must re-prime the session: run `npx tsx prime-session.ts` and confirm the account in the visible Chrome window.");
-                await captureProof(page, 'session_checkpoint');
+                proofUrl = await captureProof(page, 'session_checkpoint');
+                failureReason = 'Facebook Session Checkpoint ("Continue as..." prompt)';
             } else {
                 console.error("❌ Login verification failed.");
-                await captureProof(page, 'login_failed');
+                proofUrl = await captureProof(page, 'login_failed');
             }
+
+            // Send JUST ONE email alert per failure incident until session is restored
+            if (!sessionAlertSent) {
+                sessionAlertSent = true;
+                await sendAlertEmail(
+                    `🚨 Fiesta Fresh Bot Alert: Facebook Session Disconnected (${fbEmail})`,
+                    `The Facebook bot could not connect using saved cookies for account: ${fbEmail}\n\n` +
+                    `Reason: ${failureReason}\n` +
+                    `${proofUrl ? `Proof Screenshot: ${proofUrl}\n` : ''}\n` +
+                    `Action Required: Run \`npx tsx prime-session.ts\` or \`npx tsx refresh-session.ts\` to log in and refresh session cookies.\n\n` +
+                    `(Note: This is a single email alert. You will not receive repeated spam emails until the session is restored.)`
+                );
+            }
+
             await context.close();
             return;
+        }
+
+        if (sessionAlertSent) {
+            console.log("✅ Facebook session restored! Resetting email alert throttle.");
+            sessionAlertSent = false;
         }
 
         console.log("👤 Login verified. Starting execution...");
@@ -746,7 +771,19 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 // session dies mid-patrol. Stop early instead of scanning logged-out.
                 if (page.url().includes('/login/')) {
                     console.error("🚨 Session invalidated by Facebook (group redirected to /login/). Aborting patrol early.");
-                    await captureProof(page, 'session_lost_login');
+                    const proofUrl = await captureProof(page, 'session_lost_login');
+
+                    if (!sessionAlertSent) {
+                        sessionAlertSent = true;
+                        await sendAlertEmail(
+                            `🚨 Fiesta Fresh Bot Alert: Facebook Session Disconnected (${fbEmail})`,
+                            `Facebook session for ${fbEmail} expired during group patrol (redirected to /login/).\n\n` +
+                            `${proofUrl ? `Proof Screenshot: ${proofUrl}\n` : ''}\n` +
+                            `Action Required: Run \`npx tsx prime-session.ts\` or \`npx tsx refresh-session.ts\` to log in and refresh session cookies.\n\n` +
+                            `(Note: This is a single email alert.)`
+                        );
+                    }
+
                     return;
                 }
 
