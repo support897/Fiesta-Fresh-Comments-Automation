@@ -841,7 +841,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             }
                             
                             const activeBox = page.locator('[role="textbox"]:focus, [aria-label*="Write a comment" i], [role="textbox"]').first();
-                            if (await activeBox.isVisible({ timeout: 5000 })) {
+                            try {
+                                await activeBox.waitFor({ state: 'visible', timeout: 4000 });
+                            } catch (e) {}
+
+                            if (await activeBox.isVisible()) {
                                 await randomDelay(1000, 2000);
                                 await activeBox.click();
                                 await randomDelay(800, 1500);
