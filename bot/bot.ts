@@ -36,12 +36,13 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://xbqkcjobdnrbetrgjjrd.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_UWbZXjdMsf_Ikp2LtPRWyA_85Wop9Xg';
+const supabaseUrl = process.env.SUPABASE_URL || 'https://xmxywlyqdqrfrojwggkt.supabase.co';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhteHl3bHlxZHFyZnJvandnZ2t0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzMzI4NjUsImV4cCI6MjEwMTkwODg2NX0.p9i_3rge9IuoYz6qgL5J6dZjwptZyKU7S7AP1Bh_EHQ';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
-const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '900') * 1000;
+// 1800s = 30 minutes between each full 85-group patrol cycle (runs 24/7)
+const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '1800') * 1000;
 
 // --- Account Configuration ---
 // FB_ACCOUNTS = JSON array of {email, password} for multi-account rotation
@@ -915,12 +916,22 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         continue;
                     }
 
-                    // Check post age — filter out posts older than 2 days (e.g. 3d, 4d, 1w)
+                    // 48-hour age filter: accept posts from TODAY, YESTERDAY, 1h–23h, 1d, 2d.
+                    // Reject posts timestamped 3d, 4d, … or 1w+ (older than 48 hours).
                     const lowerText = postText.toLowerCase();
-                    if (/\b[3-9]d\b/.test(lowerText) || /\b\d{2,}d\b/.test(lowerText) || /\b\d+w\b/.test(lowerText)) {
+                    const isTooOld = (
+                        /\b[3-9]d\b/.test(lowerText) ||       // 3d–9d
+                        /\b[1-9]\d+d\b/.test(lowerText) ||    // 10d+
+                        /\b\d+\s*w\b/.test(lowerText) ||      // 1w, 2w…
+                        /\b\d+\s*mo\b/.test(lowerText) ||     // 1mo+
+                        /\b\d+\s*y\b/.test(lowerText)         // 1y+
+                    );
+                    if (isTooOld) {
                         console.log(`    ⏩ Skipping post older than 2 days (48h).`);
                         continue;
                     }
+                    // Explicitly allow: 'just now', 'now', Xm, Xh, 1d, 2d, 'yesterday', 'today'
+                    // (No action needed — these pass through the filter above naturally)
 
                     // Attempt to extract real Facebook Post ID
                     let postID = await extractFacebookPostIdFromMessage(post);
