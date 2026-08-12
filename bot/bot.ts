@@ -660,8 +660,7 @@ async function runBot() {
         
         // PHASE 1: Execute approved leads
         const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
-        const { data: templates } = await supabase.from('templates').select('*').eq('is_active', true);
-        const defaultTemplateText = `Hi! 💙 We would absolutely love to help you out!
+        const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
 
@@ -678,12 +677,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
             for (const lead of approvedLeads) {
                 console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
                 
-                // Pick a random template
-                let templateText = defaultTemplateText;
-                if (templates && templates.length > 0) {
-                    const randomIdx = Math.floor(Math.random() * templates.length);
-                    templateText = templates[randomIdx].content;
-                }
+                // Always use exact fixed reply template - zero variations
+                const templateText = FIXED_REPLY_TEMPLATE;
                 
                 if (DRY_RUN) {
                     console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
@@ -883,12 +878,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             continue;
                         }
 
-                        // Pick template text
-                        let templateText = defaultTemplateText;
-                        if (templates && templates.length > 0) {
-                            const randomIdx = Math.floor(Math.random() * templates.length);
-                            templateText = templates[randomIdx].content;
-                        }
+                        // Always use exact fixed reply template - zero variations
+                        const templateText = FIXED_REPLY_TEMPLATE;
 
                         if (DRY_RUN) {
                             console.log(`[DRY RUN] Would comment on lead (${postID}): ${postText.substring(0, 60)}...`);
