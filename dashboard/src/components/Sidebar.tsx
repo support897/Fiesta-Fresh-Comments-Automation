@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   Bell,
   AlertTriangle,
+  Cookie,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -31,6 +32,7 @@ export function Sidebar() {
       items: [
         { name: "Post Templates", href: "/templates", icon: FileText },
         { name: "Facebook Groups", href: "/groups", icon: Compass },
+        { name: "Cookies 🍪", href: "/cookies", icon: Cookie },
         { name: "Photo Library", href: "/photos", icon: ImageIcon },
         { name: "Notifications", href: "/notifications", icon: Bell },
         { name: "System Errors", href: "/errors", icon: AlertTriangle },
