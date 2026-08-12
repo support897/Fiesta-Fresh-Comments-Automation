@@ -556,16 +556,11 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
     }
 }
 
-async function runBot() {
+async function runBot(account: FbAccount): Promise<boolean> {
     console.log("🤖 Starting Fiesta Fresh Automation Bot...");
     console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
     
-    const account = nextAccount();
-    if (!account) {
-        console.error("❌ No Facebook accounts configured. Set FB_ACCOUNTS or FB_EMAIL/FB_PASSWORD.");
-        return;
-    }
     const fbEmail = account.email;
     const fbPassword = account.password;
     console.log(`👤 Account: ${fbEmail}`);
@@ -583,7 +578,7 @@ async function runBot() {
 
     if (!botActive) {
         console.log("⏸️ Bot is paused in Supabase config. Waiting...");
-        return;
+        return true;
     }
 
     const proxyServer = process.env.PROXY_SERVER;
@@ -753,7 +748,7 @@ async function runBot() {
             }
 
             await context.close();
-            return;
+            return false;
         }
 
         if (sessionAlertSent) {
@@ -898,7 +893,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         );
                     }
 
-                    return;
+                    return false;
                 }
 
                 // Switch to Discussion if Buy/Sell layout
@@ -1117,6 +1112,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
         await context.close();
         console.log("🏁 Cycle complete.");
     }
+    return true;
 }
 
 // **MAIN LOOP - Run continuously**
@@ -1165,7 +1161,27 @@ async function main() {
         }
         isRunning = true;
         try {
-            await runBot();
+            if (ACCOUNTS.length === 0) {
+                console.error("❌ No Facebook accounts configured.");
+                return;
+            }
+            // Try accounts in sequence until one succeeds to log in
+            let success = false;
+            for (let i = 0; i < ACCOUNTS.length; i++) {
+                const account = nextAccount();
+                if (!account) continue;
+                console.log(`👤 Testing rotation account: ${account.email}`);
+                success = await runBot(account);
+                if (success) {
+                    break;
+                } else {
+                    console.log(`⚠️ Account ${account.email} failed to login. Rotating to next configured account immediately...`);
+                    await randomDelay(3000, 5000);
+                }
+            }
+            if (!success) {
+                console.error("❌ All configured Facebook accounts failed to authenticate in this cycle.");
+            }
         } catch (err) {
             console.error("Bot cycle failed:", err);
         } finally {
