@@ -831,37 +831,39 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
                                 await closeOverlays(page);
                                 
-                                let commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
-                                if (!(await commentBox.isVisible())) {
-                                    const commentBtn = posts.nth(i).locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
-                                    if (await commentBtn.isVisible()) {
-                                        await commentBtn.click();
-                                        await randomDelay(800, 1500);
-                                        commentBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
-                                    }
-                                }
-                                
-                                if (await commentBox.isVisible()) {
+                            let commentBox = posts.nth(i).locator('[aria-label*="comment" i], [aria-label*="Write" i], [role="textbox"]').first();
+                            if (!(await commentBox.isVisible())) {
+                                const commentBtn = posts.nth(i).locator('[aria-label*="Comment" i], [aria-label*="Leave a comment" i], span:has-text("Comment")').first();
+                                if (await commentBtn.isVisible()) {
+                                    await commentBtn.click({ force: true });
                                     await randomDelay(1000, 2000);
-                                    await commentBox.click();
-                                    await randomDelay(800, 1500);
-                                    await humanType(page, '[role="textbox"]:focus', templateText);
-                                    await randomDelay(500, 1000);
-                                    await page.keyboard.press('Enter');
-                                    await randomDelay(2000, 3000);
-                                    
-                                    await supabase.from('replies_log').insert({
-                                        post_id: lead.post_id,
-                                        group_url: lead.group_url,
-                                        comment_id: `comment_${Date.now()}`,
-                                        replied_at: new Date()
-                                    });
-                                    
-                                    await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                                    console.log("✅ Comment posted and logged.");
-                                    found = true;
-                                    break;
                                 }
+                            }
+                            
+                            const activeBox = page.locator('[role="textbox"]:focus, [aria-label*="Write a comment" i], [role="textbox"]').first();
+                            if (await activeBox.isVisible({ timeout: 5000 })) {
+                                await randomDelay(1000, 2000);
+                                await activeBox.click();
+                                await randomDelay(800, 1500);
+                                await page.keyboard.type(templateText, { delay: 30 });
+                                await randomDelay(500, 1000);
+                                await page.keyboard.press('Enter');
+                                await randomDelay(2000, 3000);
+                                
+                                const { error: replyErr } = await supabase.from('replies_log').insert({
+                                    post_id: lead.post_id,
+                                    group_url: lead.group_url,
+                                    comment_id: `comment_${Date.now()}`,
+                                    replied_at: new Date()
+                                });
+                                
+                                const { error: leadErr } = await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
+                                console.log(`✅ Comment posted and logged for lead ${lead.post_id}! (replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'})`);
+                                found = true;
+                                break;
+                            } else {
+                                console.warn(`⚠️ Could not locate visible comment box for lead ${lead.post_id}.`);
+                            }
                             }
                         }
                         if (found) break;
