@@ -39,7 +39,7 @@ const ACCOUNTS = [
   {
     key: "account3",
     label: "Account 3 — Website Booster",
-    description: "Posts https://www.fiestafreshcleaning.com/ on 100% of leads",
+    description: "Comments https://www.fiestafreshcleaning.com/ on 100% of leads",
     color: "emerald",
     emoji: "🌐",
     supabaseEmail: "account3",

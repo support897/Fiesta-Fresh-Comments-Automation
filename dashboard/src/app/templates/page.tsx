@@ -25,7 +25,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              Post Templates & Auto-Reply Rules
+              Comment Templates & Auto-Reply Rules
             </h1>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
               <Lock className="w-3.5 h-3.5" /> Enforced Templates
@@ -66,7 +66,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
           <div className="flex items-center gap-2">
             <Globe className="w-5 h-5 text-indigo-600" />
             <h3 className="text-base font-extrabold text-slate-900">
-              Account 3: Website URL Booster Comment (100% of Approved Posts)
+              Account 3: Website URL Booster Comment (100% of Matched Leads)
             </h3>
           </div>
           <span className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold px-3 py-1 rounded-full">
@@ -79,7 +79,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
         </div>
 
         <p className="text-[11px] text-slate-400 font-medium">
-          Comments EXACTLY ONCE on 100% of approved posts, 5 seconds right after Account 1 or 2 comments. Zero text variations.
+          Comments EXACTLY ONCE on 100% of matched leads, 5 seconds right after Account 1 or 2 comments. Zero text variations.
         </p>
       </div>
     </div>

@@ -330,7 +330,7 @@ export default function DashboardPage() {
                 <th className="px-4 py-3">Group Target</th>
                 <th className="px-4 py-3">Comment URL</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Posted At</th>
+                <th className="px-4 py-3">Commented At</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -394,7 +394,7 @@ export default function DashboardPage() {
                     {/* Status */}
                     <td className="px-4 py-4">
                       <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-emerald-50 text-emerald-600 border-emerald-100">
-                        posted
+                        commented
                       </span>
                     </td>
 
@@ -436,7 +436,7 @@ export default function DashboardPage() {
           <div>
             <span className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 mb-1">
               <Globe className="w-3.5 h-3.5 text-indigo-500" />
-              Account 3 (Website Booster) · URL Drop · 100% of posts
+              Account 3 (Website Booster) · URL Drop · 100% of leads
             </span>
             <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-xs font-mono font-bold text-indigo-900">
               https://www.fiestafreshcleaning.com/

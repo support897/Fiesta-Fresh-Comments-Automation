@@ -25,7 +25,7 @@ const operationsNav = [
 ];
 
 const managementNav = [
-  { name: "Post Templates",   href: "/templates",     icon: FileText    },
+  { name: "Comment Templates", href: "/templates",     icon: FileText    },
   { name: "Facebook Groups",  href: "/groups",        icon: Compass     },
   { name: "Cookies 🍪",       href: "/cookies",       icon: Cookie      },
   { name: "Photo Library",    href: "/photos",        icon: Image       },

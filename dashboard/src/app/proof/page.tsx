@@ -66,7 +66,7 @@ export default function ProofGallery() {
             </span>
           </div>
           <p className="text-xs text-slate-500">
-            Real-time visual proof captured from Azure VPS browser (post confirmations, session checkpoints, error audits).
+            Real-time visual proof captured from Azure VPS browser (comment confirmations, session checkpoints, error audits).
           </p>
         </div>
 
