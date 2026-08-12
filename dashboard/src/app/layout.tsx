@@ -6,8 +6,8 @@ import { Sidebar } from "@/components/Sidebar";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Fiesta Fresh Cleaning | CEO Automation Dashboard",
-  description: "24/7 Facebook Comments Automation & Lead Intelligence Command Center",
+  title: "Fiesta - comments",
+  description: "Fiesta Fresh Cleaning Comments Automation Dashboard",
 };
 
 export default function RootLayout({
@@ -17,10 +17,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
-      <body className="min-h-full flex bg-slate-50 font-sans text-slate-900 overflow-hidden">
+      <body className="flex overflow-hidden bg-slate-50 font-sans text-slate-900">
         <Sidebar />
-        <main className="flex-1 h-screen overflow-y-auto custom-scrollbar">
-          {children}
+        <main className="flex-1 overflow-y-auto h-screen custom-scrollbar">
+          <div className="max-w-7xl mx-auto p-4 md:p-8">
+            {children}
+          </div>
         </main>
       </body>
     </html>
