@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { Open_Sans, Playfair_Display } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import { Sidebar } from "@/components/Sidebar";
 
-const openSans = Open_Sans({ subsets: ["latin"], variable: "--font-sans" });
-const playfair = Playfair_Display({ subsets: ["latin"], variable: "--font-display" });
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Fiesta - comments",
-  description: "Fiesta Fresh Cleaning Comments Automation Dashboard",
+  title: "Fiesta Fresh Cleaning | CEO Automation Dashboard",
+  description: "24/7 Facebook Comments Automation & Lead Intelligence Command Center",
 };
 
 export default function RootLayout({
@@ -16,11 +16,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${openSans.variable} ${playfair.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+      <body className="min-h-full flex bg-slate-50 font-sans text-slate-900 overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 h-screen overflow-y-auto custom-scrollbar">
+          {children}
+        </main>
+      </body>
     </html>
   );
 }
