@@ -950,7 +950,6 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await page.keyboard.press('Enter');
                                 await randomDelay(2000, 3000);
                                 
-                                // Capture current page URL as the comment permalink
                                 const commentPageUrl = page.url();
                                 const { error: replyErr } = await supabase.from('replies_log').insert({
                                     post_id: lead.post_id,
@@ -964,6 +963,12 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 const { error: leadErr } = await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
                                 console.log(`✅ Comment posted and logged for lead ${lead.post_id}! (replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'})`);
                                 found = true;
+
+                                // ✅ Account 3 booster — fires 5s after every successful main-account comment
+                                console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
+                                await randomDelay(4000, 6000);
+                                await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+
                                 break;
                             } else {
                                 console.warn(`⚠️ Could not locate visible comment box for lead ${lead.post_id}.`);
@@ -1225,13 +1230,18 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             console.error(`⚠️ Could not post comment directly: ${commentErr.message?.slice(0, 80)}`);
                         }
 
-                        // Write to replies_log to ensure no duplicate comments
-                        await supabase.from('replies_log').insert({
-                            post_id: postID,
-                            group_url: group.url,
-                            comment_id: `comment_${Date.now()}`,
-                            replied_at: new Date()
-                        });
+                        // Write to replies_log only if main account actually commented
+                        if (commented) {
+                            const scanPageUrl = page.url();
+                            await supabase.from('replies_log').insert({
+                                post_id: postID,
+                                group_url: group.url,
+                                comment_id: `comment_${Date.now()}`,
+                                account_name: fbEmail,
+                                comment_url: scanPageUrl,
+                                replied_at: new Date()
+                            });
+                        }
 
                         const { error: insertError } = await supabase.from('leads').insert({
                             post_id: postID,
@@ -1249,11 +1259,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         } else {
                             console.log(`✅ Lead logged as ${commented ? 'posted' : 'approved'}.`);
                         }
-                        if (commented) {
-                            console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
-                            await randomDelay(4000, 6000);
-                            await postWebsiteUrlBoosterReply(group.url, postID);
-                        }
+                        // Account 3 booster fires regardless — even if main account failed,
+                        // the URL drop still goes on 100% of leads found
+                        console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
+                        await randomDelay(4000, 6000);
+                        await postWebsiteUrlBoosterReply(group.url, postID);
                     }
                     
                     await randomDelay(500, 1500);
