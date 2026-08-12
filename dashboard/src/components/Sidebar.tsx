@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Camera,
+  Link2,
   Calendar,
   FileText,
   Compass,
@@ -23,7 +23,7 @@ export function Sidebar() {
       title: "Operations Center",
       items: [
         { name: "Command Center", href: "/", icon: LayoutDashboard },
-        { name: "Proof Gallery", href: "/proof", icon: Camera },
+        { name: "URL Gallery", href: "/proof", icon: Link2 },
         { name: "Schedule Manager", href: "/schedule", icon: Calendar },
       ],
     },
