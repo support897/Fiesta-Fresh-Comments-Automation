@@ -209,15 +209,20 @@ async function randomDelay(min: number = 500, max: number = 2000) {
 }
 
 /**
- * Human-like typing with random speed
+ * Human-like typing with multiline single-comment preservation
  */
 async function humanType(page: any, selector: string, text: string) {
     await page.click(selector);
     await randomDelay(300, 800);
     
-    for (const char of text) {
-        const typingSpeed = Math.floor(Math.random() * 100) + 45; // 45-145ms per char
-        await page.type(selector, char, { delay: typingSpeed });
+    if (text.includes('\n')) {
+        // Use insertText for multiline text so newlines (\n) do NOT trigger line-by-line Enter submits on Facebook
+        await page.keyboard.insertText(text);
+    } else {
+        for (const char of text) {
+            const typingSpeed = Math.floor(Math.random() * 80) + 35; // 35-115ms per char
+            await page.type(selector, char, { delay: typingSpeed });
+        }
     }
 }
 
@@ -770,7 +775,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await randomDelay(1000, 2000);
                                 await activeBox.click();
                                 await randomDelay(800, 1500);
-                                await page.keyboard.type(templateText, { delay: 30 });
+                                await page.keyboard.insertText(templateText);
                                 await randomDelay(500, 1000);
                                 await page.keyboard.press('Enter');
                                 await randomDelay(2000, 3000);
