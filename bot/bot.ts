@@ -1068,28 +1068,35 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
         let groupsToScan: { url: string }[] = [];
         try {
-            const fs = await import('fs');
-            const candidatePaths = [
-                path.join(process.cwd(), 'target_groups.json'),
-                path.join(process.cwd(), 'bot', 'target_groups.json'),
-                path.join(__dirname, 'target_groups.json'),
-                path.join(__dirname, '..', 'target_groups.json')
-            ];
-            const targetFile = candidatePaths.find(p => fs.existsSync(p));
-            if (targetFile) {
-                const rawUrls: string[] = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
-                groupsToScan = rawUrls.map(url => ({ url }));
-                console.log(`📋 Loaded ${groupsToScan.length} target groups from ${targetFile}`);
-            } else {
-                console.warn("⚠️ target_groups.json not found in candidate paths:", candidatePaths);
+            const { data: dbGroups, error: dbErr } = await supabase.from('groups').select('url').eq('is_active', true);
+            if (!dbErr && dbGroups && dbGroups.length > 0) {
+                groupsToScan = dbGroups;
+                console.log(`📋 Loaded ${groupsToScan.length} active target groups from Supabase.`);
             }
         } catch (e: any) {
-            console.warn("⚠️ Error loading target_groups.json:", e.message);
+            console.warn("⚠️ Error loading target groups from Supabase, falling back to local file:", e.message);
         }
 
         if (groupsToScan.length === 0) {
-            const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
-            if (groups) groupsToScan = groups;
+            try {
+                const fs = await import('fs');
+                const candidatePaths = [
+                    path.join(process.cwd(), 'target_groups.json'),
+                    path.join(process.cwd(), 'bot', 'target_groups.json'),
+                    path.join(__dirname, 'target_groups.json'),
+                    path.join(__dirname, '..', 'target_groups.json')
+                ];
+                const targetFile = candidatePaths.find(p => fs.existsSync(p));
+                if (targetFile) {
+                    const rawUrls: string[] = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
+                    groupsToScan = rawUrls.map(url => ({ url }));
+                    console.log(`📋 Loaded ${groupsToScan.length} fallback target groups from ${targetFile}`);
+                } else {
+                    console.warn("⚠️ target_groups.json not found in candidate paths:", candidatePaths);
+                }
+            } catch (e: any) {
+                console.warn("⚠️ Error loading target_groups.json:", e.message);
+            }
         }
 
         let consecutiveLoginRedirects = 0;
