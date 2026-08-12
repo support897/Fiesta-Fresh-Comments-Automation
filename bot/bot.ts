@@ -854,13 +854,23 @@ We will also send you a DM just in case you have any questions. Make sure to che
         let groupsToScan: { url: string }[] = [];
         try {
             const fs = await import('fs');
-            const targetFile = path.join(__dirname, 'target_groups.json');
-            if (fs.existsSync(targetFile)) {
+            const candidatePaths = [
+                path.join(process.cwd(), 'target_groups.json'),
+                path.join(process.cwd(), 'bot', 'target_groups.json'),
+                path.join(__dirname, 'target_groups.json'),
+                path.join(__dirname, '..', 'target_groups.json')
+            ];
+            const targetFile = candidatePaths.find(p => fs.existsSync(p));
+            if (targetFile) {
                 const rawUrls: string[] = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
                 groupsToScan = rawUrls.map(url => ({ url }));
-                console.log(`📋 Loaded ${groupsToScan.length} target groups from target_groups.json`);
+                console.log(`📋 Loaded ${groupsToScan.length} target groups from ${targetFile}`);
+            } else {
+                console.warn("⚠️ target_groups.json not found in candidate paths:", candidatePaths);
             }
-        } catch {}
+        } catch (e: any) {
+            console.warn("⚠️ Error loading target_groups.json:", e.message);
+        }
 
         if (groupsToScan.length === 0) {
             const { data: groups } = await supabase.from('groups').select('*').eq('is_active', true);
