@@ -174,20 +174,30 @@ async function extractFacebookPostIdFromMessage(message: any): Promise<string | 
     }
 }
 
-// Keyword quick filters (instant approval/rejection - no AI cost)
-const APPROVE_KEYWORDS = [
-    'cleaner', 'cleaning', 'clean', 'bond clean', 'end of lease', 
-    'deep clean', 'house clean', 'home clean', 'maid', 'domestic',
-    'spring clean', 'move out', 'vacate', 'carpet clean', 'window clean',
-    'office clean', 'office cleaning', 'commercial clean', 'commercial cleaning',
-    'price', 'cost', 'how much', 'quote', 'rate', 'recommend', 'recommendation'
+// High-Precision Zero-API Keyword Engine (No Cloud API Required)
+const INTENT_LEAD_KEYWORDS = [
+    "looking for a cleaner", "looking for cleaner", "looking for cleaners",
+    "recommend a cleaner", "recommend cleaner", "recommendation for cleaner", "recommendations for cleaner",
+    "need a cleaner", "need cleaner", "cleaner needed", "cleaner wanted", "cleaners wanted",
+    "who does cleaning", "anyone know a cleaner", "anyone know a good cleaner",
+    "can anyone recommend a cleaner", "searching for a cleaner", "require a cleaner",
+    "hiring a cleaner", "hire a cleaner", "help with cleaning", "assistance with cleaning",
+    "looking for bond clean", "looking for bond cleaner", "need bond clean", "bond clean needed",
+    "need house cleaner", "looking for house cleaner", "house cleaner needed",
+    "end of lease clean", "bond clean", "bond cleaning", "house cleaning", "deep clean",
+    "carpet cleaning", "window cleaning", "air bnb cleaning", "airbnb cleaning", "office cleaning",
+    "commercial cleaning", "builder clean", "builders clean", "regular clean", "weekly clean",
+    "fortnightly clean", "cleaner for home", "cleaner for house", "cleaner for flat", "cleaner for apartment"
 ];
 
-const REJECT_KEYWORDS = [
-    'car wash', 'car clean', 'vehicle', 'mobile detailing',
-    'warehouse', 'factory',
-    'pool clean', 'gutter', 'lawn', 'garden', 'landscaping',
-    'plumber', 'electrician', 'handyman', 'painter', 'removalist'
+const DISQUALIFIER_KEYWORDS = [
+    "i offer", "we offer", "my business", "our business", "my cleaning", "our cleaning",
+    "book now", "pm for quote", "dm for quote", "dm me", "pm me", "contact us on",
+    "call us at", "call/text", "special offer", "discount", "services offered",
+    "what we do", "fully insured cleaner", "reusable", "cloth", "vacuum cleaner for sale",
+    "selling", "for sale", "hiring cleaners", "cleaner position", "job opening", "car wash",
+    "car clean", "mobile detailing", "pool clean", "gutter", "lawn", "gardening", "landscaping",
+    "plumber", "electrician", "handyman", "painter", "removalist"
 ];
 
 /**
@@ -274,24 +284,34 @@ async function extractCommenterName(postElement: any): Promise<string> {
 }
 
 /**
- * Keyword-based quick filter (saves AI costs)
+ * High-Precision Zero-API Keyword Engine
  */
 function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
     const lowerText = postText.toLowerCase();
     
-    // Check reject keywords first (high priority)
-    for (const keyword of REJECT_KEYWORDS) {
+    // 1. Check Disqualifiers (Reject immediately)
+    for (const keyword of DISQUALIFIER_KEYWORDS) {
         if (lowerText.includes(keyword.toLowerCase())) {
-            console.log(`❌ Quick REJECT - keyword: "${keyword}"`);
+            console.log(`❌ Disqualified - matched reject keyword: "${keyword}"`);
             return 'reject';
         }
     }
+
+    // 2. Check Lead Intent Keywords (Approve immediately - 0 API cost!)
+    for (const keyword of INTENT_LEAD_KEYWORDS) {
+        if (lowerText.includes(keyword.toLowerCase())) {
+            console.log(`🎯 HIGH ACCURACY LEAD MATCH - matched lead keyword: "${keyword}"`);
+            return 'approve';
+        }
+    }
     
-    // We intentionally removed the quick approve filter.
-    // ALL non-rejected posts MUST be evaluated by the AI for true 100% accuracy.
-    
-    console.log("🤔 Unsure - sending to AI evaluation");
-    return 'unsure';
+    // 3. Fallback: If post mentions 'clean' or 'cleaner', evaluate via local Semantic AI
+    if (lowerText.includes('clean')) {
+        console.log("🤔 Post mentions clean/cleaner - evaluating via local Semantic AI...");
+        return 'unsure';
+    }
+
+    return 'reject';
 }
 
 /**
