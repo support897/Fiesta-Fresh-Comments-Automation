@@ -813,8 +813,12 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 for (let scroll = 0; scroll < 5; scroll++) {
                     await page.mouse.wheel(0, 1000);
                     await randomDelay(1500, 3000);
-                    const posts = page.locator('[role="article"]');
-                    const count = await posts.count();
+                    const posts = page.locator('[data-ad-preview="message"], [role="article"]');
+                    let count = await posts.count();
+                    if (count === 0) {
+                        // Fallback selector for posts container
+                        count = await page.locator('div[role="feed"] > div').count();
+                    }
                     let found = false;
 
                     for (let i = 0; i < count; i++) {
