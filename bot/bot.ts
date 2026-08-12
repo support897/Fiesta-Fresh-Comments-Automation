@@ -476,10 +476,20 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         const { data: session } = await supabase
             .from('sessions')
             .select('cookies')
-            .eq('user_email', 'account3_booster@fiestafresh.com')
+            .eq('user_email', 'account3')
             .maybeSingle();
 
         let cookies = session?.cookies;
+        if (!cookies) {
+            // Check fallback email
+            const { data: sessionFallback } = await supabase
+                .from('sessions')
+                .select('cookies')
+                .eq('user_email', 'account3_booster@fiestafresh.com')
+                .maybeSingle();
+            cookies = sessionFallback?.cookies;
+        }
+
         if (!cookies) {
             const fs = await import('fs');
             const localFile = path.join(__dirname, 'account3_cookies.json');
@@ -501,7 +511,20 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             viewport: { width: 1280, height: 900 },
             userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         });
-        await boosterContext.addCookies(cookies);
+
+        // Normalize sameSite values for Account 3
+        const sameSiteMap: Record<string, 'None' | 'Lax' | 'Strict'> = {
+            'no_restriction': 'None',
+            'none': 'None',
+            'lax': 'Lax',
+            'strict': 'Strict',
+            'unspecified': 'Lax',
+        };
+        const normalisedCookies = (cookies as any[]).map((c: any) => {
+            const ss = sameSiteMap[(c.sameSite || '').toLowerCase()] ?? 'None';
+            return { ...c, sameSite: ss };
+        });
+        await boosterContext.addCookies(normalisedCookies);
 
         const boosterPage = await boosterContext.newPage();
         await boosterPage.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -627,9 +650,22 @@ async function runBot() {
     const { data: savedSession } = await supabase.from('sessions').select('cookies').eq('user_email', fbEmail).order('updated_at', { ascending: false }).limit(1).maybeSingle();
     if (savedSession?.cookies && Array.isArray(savedSession.cookies)) {
         try {
-            await context.addCookies(savedSession.cookies as any);
+            // Normalise sameSite values: Chrome exports "no_restriction"/"lax"/"strict"/"unspecified"
+            // but Playwright requires exactly "None"|"Lax"|"Strict".
+            const sameSiteMap: Record<string, 'None' | 'Lax' | 'Strict'> = {
+                'no_restriction': 'None',
+                'none': 'None',
+                'lax': 'Lax',
+                'strict': 'Strict',
+                'unspecified': 'Lax',
+            };
+            const normalisedCookies = savedSession.cookies.map((c: any) => {
+                const ss = sameSiteMap[(c.sameSite || '').toLowerCase()] ?? 'None';
+                return { ...c, sameSite: ss };
+            });
+            await context.addCookies(normalisedCookies);
             restoredSession = true;
-            console.log(`💾 Restored session for ${fbEmail} from Supabase (${savedSession.cookies.length} cookies).`);
+            console.log(`💾 Restored session for ${fbEmail} from Supabase (${normalisedCookies.length} cookies).`);
         } catch (e) {
             console.warn(`⚠️ Could not restore saved session: ${e}`);
         }
