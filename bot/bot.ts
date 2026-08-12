@@ -823,11 +823,23 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                     for (let i = 0; i < count; i++) {
                         const postText = (await posts.nth(i).innerText()).trim();
-                        if (postText.includes(lead.post_text.substring(0, 50))) {
-                            console.log("🎯 Found approved post! Commenting...");
+                        const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
+                        const targetSnippet = norm(lead.post_text).slice(0, 35);
+                        
+                        if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
+                            console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
                             await closeOverlays(page);
                             
-                            const commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                            let commentBox = posts.nth(i).locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                            if (!(await commentBox.isVisible())) {
+                                const commentBtn = posts.nth(i).locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
+                                if (await commentBtn.isVisible()) {
+                                    await commentBtn.click();
+                                    await randomDelay(800, 1500);
+                                    commentBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
+                                }
+                            }
+                            
                             if (await commentBox.isVisible()) {
                                 await randomDelay(1000, 2000);
                                 await commentBox.click();
@@ -837,7 +849,6 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await page.keyboard.press('Enter');
                                 await randomDelay(2000, 3000);
                                 
-                                // **FIX: Write to replies_log for deduplication**
                                 await supabase.from('replies_log').insert({
                                     post_id: lead.post_id,
                                     group_url: lead.group_url,
