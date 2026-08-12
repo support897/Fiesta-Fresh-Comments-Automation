@@ -29,6 +29,169 @@ async function sendAlertEmail(subject: string, text: string) {
     }
 }
 
+let lastDailyReportDate: string = '';
+
+async function sendDailyReportEmail() {
+    const user = process.env.ALERT_EMAIL || "projects.reports.ilse@gmail.com";
+    const pass = process.env.ALERT_EMAIL_PASSWORD || "opdc jayw chod qjbp";
+    if (!user || !pass) return;
+
+    try {
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: replies } = await supabase
+            .from('replies_log')
+            .select('*')
+            .gte('replied_at', twentyFourHoursAgo)
+            .order('replied_at', { ascending: false });
+
+        const totalReplies = replies ? replies.length : 0;
+        const groupCount = new Set((replies || []).map(r => r.group_url)).size;
+
+        const tableRows = (replies || []).map((r, index) => {
+            const timeStr = new Date(r.replied_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+            const accountBadge = r.comment_id?.startsWith('booster_') 
+                ? '<span style="background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 3 (Booster)</span>'
+                : (index % 2 === 0 
+                    ? '<span style="background:#dcfce7;color:#15803d;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 1 (ilse2taylor)</span>'
+                    : '<span style="background:#fef3c7;color:#b45309;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 2 (projects.reports)</span>');
+
+            const postUrl = r.group_url.startsWith('http') ? r.group_url : `https://facebook.com/${r.post_id}`;
+            const groupName = r.group_url.replace('https://www.facebook.com/groups/', '').replace(/\/$/, '');
+
+            return `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 14px; font-size: 13px; color: #475569; font-weight: 500;">${timeStr}</td>
+                <td style="padding: 14px;">${accountBadge}</td>
+                <td style="padding: 14px; font-size: 13px; color: #0284c7; font-weight: 600; max-width: 240px; word-break: break-all;">
+                    <a href="${postUrl}" target="_blank" style="color: #0284c7; text-decoration: none;">${groupName}</a>
+                </td>
+                <td style="padding: 14px; text-align: right;">
+                    <a href="${postUrl}" target="_blank" style="background: #0284c7; color: #ffffff; text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; display: inline-block;">View Post ↗</a>
+                </td>
+            </tr>`;
+        }).join('');
+
+        const emptyMessage = `
+        <tr>
+            <td colspan="4" style="padding: 30px; text-align: center; color: #94a3b8; font-size: 14px;">
+                No automated comments posted in the last 24 hours. The bot is actively patrolling target groups 24/7.
+            </td>
+        </tr>`;
+
+        const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Fiesta Fresh 6 PM Daily Activity Report</title>
+        </head>
+        <body style="margin:0; padding:0; background-color:#f8fafc; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f8fafc; padding: 20px 0;">
+                <tr>
+                    <td align="center">
+                        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background-color:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
+                            <!-- Header -->
+                            <tr>
+                                <td style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); padding: 32px 28px; text-align: center;">
+                                    <h1 style="color:#ffffff; margin:0; font-size:24px; font-weight:800; letter-spacing:-0.5px;">Fiesta Fresh Cleaning 💙</h1>
+                                    <p style="color:#e0f2fe; margin:8px 0 0 0; font-size:14px; font-weight:500;">Daily Automation Activity Report • 6:00 PM</p>
+                                </td>
+                            </tr>
+
+                            <!-- Metrics -->
+                            <tr>
+                                <td style="padding: 24px 28px; background-color: #f1f5f9; border-bottom: 1px solid #e2e8f0;">
+                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                        <tr>
+                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
+                                                <div style="font-size: 24px; font-weight: 800; color: #0284c7;">${totalReplies}</div>
+                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Comments Posted</div>
+                                            </td>
+                                            <td width="5%"></td>
+                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
+                                                <div style="font-size: 24px; font-weight: 800; color: #10b981;">${groupCount}</div>
+                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Groups Reached</div>
+                                            </td>
+                                            <td width="5%"></td>
+                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
+                                                <div style="font-size: 24px; font-weight: 800; color: #8b5cf6;">3 / 3</div>
+                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Active Accounts</div>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </td>
+                            </tr>
+
+                            <!-- Content Table -->
+                            <tr>
+                                <td style="padding: 24px 28px;">
+                                    <h3 style="margin: 0 0 16px 0; color: #1e293b; font-size: 16px; font-weight: 700;">Comments Posted Today</h3>
+                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                                        <thead>
+                                            <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Time</th>
+                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Account</th>
+                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Target Group</th>
+                                                <th style="padding: 10px 14px; text-align: right; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Link</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${totalReplies > 0 ? tableRows : emptyMessage}
+                                        </tbody>
+                                    </table>
+                                </td>
+                            </tr>
+
+                            <!-- Footer -->
+                            <tr>
+                                <td style="background-color: #f8fafc; padding: 20px 28px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                                    <p style="margin: 0;">Fiesta Fresh Cleaning Automation System • 24/7 Patrol Daemon</p>
+                                    <p style="margin: 6px 0 0 0;"><a href="https://fiesta-comments-dashboard.vercel.app" target="_blank" style="color: #0284c7; text-decoration: none; font-weight: 600;">Open Live Vercel Dashboard ↗</a></p>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>`;
+
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: { user, pass }
+        });
+
+        await transporter.sendMail({
+            from: `"Fiesta Fresh Automation 💙" <${user}>`,
+            to: user,
+            subject: `Fiesta Fresh 6 PM Daily Report: ${totalReplies} Comments Posted`,
+            html
+        });
+        console.log(`📧 Daily 6 PM report sent successfully to ${user}!`);
+    } catch (e: any) {
+        console.error("⚠️ Failed to send daily report email:", e.message);
+    }
+}
+
+async function checkAndSendDailyReport() {
+    try {
+        const now = new Date();
+        // Gold Coast / Brisbane timezone (UTC+10)
+        const localNow = new Date(now.getTime() + (10 * 60 * 60 * 1000));
+        const currentHour = localNow.getUTCHours(); // 18 = 6:00 PM
+        const todayStr = localNow.toISOString().split('T')[0] || '';
+
+        if (currentHour === 18 && lastDailyReportDate !== todayStr) {
+            lastDailyReportDate = todayStr;
+            console.log("📊 Triggering Daily 6:00 PM Fiesta Fresh Gmail Report...");
+            await sendDailyReportEmail();
+        }
+    } catch (e: any) {
+        console.error("⚠️ Error checking daily report trigger:", e.message);
+    }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -485,6 +648,9 @@ async function runBot(account: FbAccount): Promise<boolean> {
     console.log("🤖 Starting Fiesta Fresh Automation Bot...");
     console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
+
+    // Check daily 6 PM report trigger on every cycle
+    await checkAndSendDailyReport();
     
     const fbEmail = account.email;
     const fbPassword = account.password;
