@@ -1,65 +1,47 @@
 import { chromium } from 'playwright-core';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
-import * as https from 'https';
+import * as fs from 'fs';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://xbqkcjobdnrbetrgjjrd.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_UWbZXjdMsf_Ikp2LtPRWyA_85Wop9Xg';
+const localCookiePath = path.join(__dirname, 'account3_cookies.json');
 
 console.log("==================================================");
-console.log("🌐 ACCOUNT 3 COOKIE PRIMER & SAVER");
-console.log("==================================================");
-console.log("Opening Chrome window for Account 3 (Website Booster)...");
-console.log("Please log into Account 3 in the visible Chrome browser.");
-console.log("THE BROWSER WILL REMAIN OPEN UNTIL YOU MANUALLY CLOSE IT.");
+console.log("🌐 ACCOUNT 3 COOKIE SAVER & VPS SYNC");
 console.log("==================================================");
 
-async function upsertSessionToSupabase(userEmail: string, cookies: any[]) {
-    return new Promise((resolve, reject) => {
-        const urlObj = new URL(`${supabaseUrl}/rest/v1/sessions`);
-        const payload = JSON.stringify([{
-            user_email: userEmail,
-            cookies: cookies,
-            updated_at: new Date().toISOString()
-        }]);
-
-        const req = https.request({
-            hostname: urlObj.hostname,
-            path: urlObj.pathname,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`,
-                'Prefer': 'resolution=merge-duplicates',
-                'Content-Length': Buffer.byteLength(payload)
-            }
-        }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                    console.log(`✅ SUCCESS: ${cookies.length} cookies saved to Supabase for ${userEmail}!`);
-                    resolve(true);
-                } else {
-                    console.error(`❌ Supabase error status ${res.statusCode}:`, body);
-                    resolve(false);
-                }
-            });
-        });
-
-        req.on('error', (err) => {
-            console.error("❌ HTTPS request error:", err.message);
-            reject(err);
-        });
-
-        req.write(payload);
-        req.end();
-    });
+function saveCookiesToVPS(cookieFilePath: string) {
+    try {
+        console.log("🚀 Syncing Account 3 cookies to Azure VPS (20.193.52.236)...");
+        execSync(`sshpass -p 'Fiesta2026!Fresh' scp -o StrictHostKeyChecking=no "${cookieFilePath}" azureuser@20.193.52.236:~/Fiesta-Fresh-Comments-Automation/bot/account3_cookies.json`, { stdio: 'ignore' });
+        console.log("✅ Account 3 cookies synced to Azure VPS (20.193.52.236) forever!");
+        return true;
+    } catch {
+        // Fallback using python paramiko script
+        try {
+            const pyScript = `
+import paramiko
+ssh = paramiko.SSHClient()
+ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+ssh.connect('20.193.52.236', username='azureuser', password='Fiesta2026!Fresh')
+sftp = ssh.open_sftp()
+sftp.put('${cookieFilePath}', '/home/azureuser/Fiesta-Fresh-Comments-Automation/bot/account3_cookies.json')
+sftp.close()
+ssh.close()
+print("✅ Synced via Python SFTP!")
+`;
+            execSync(`python3 -c "${pyScript.replace(/\n/g, ' ')}"`, { stdio: 'ignore' });
+            console.log("✅ Account 3 cookies synced to Azure VPS (20.193.52.236) forever!");
+            return true;
+        } catch (err: any) {
+            console.warn("⚠️ Local cookies saved. Remote VPS sync alert:", err.message);
+            return false;
+        }
+    }
 }
 
 async function main() {
@@ -89,34 +71,47 @@ async function main() {
     const page = await context.newPage();
     await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded' });
 
-    console.log("⏳ Chrome window is ready. Log into Account 3 at your own pace. Window will NOT close automatically.");
+    console.log("⏳ Chrome window is ready. Log into Account 3 at your own pace.");
+    console.log("Cookies will save automatically as soon as login is detected.");
+    console.log("Closing the browser window manually when finished will finalize saving.");
 
     let saved = false;
 
-    // Save cookies periodically once logged in, without closing browser
     const interval = setInterval(async () => {
         try {
             const cookies = await context.cookies();
             if (cookies && cookies.length > 5 && !saved) {
                 saved = true;
-                console.log("\n🎉 LOGIN DETECTED! Saving Account 3 cookies to Supabase...");
-                await upsertSessionToSupabase("account3_booster@fiestafresh.com", cookies);
-                console.log("✅ Cookies saved! You can continue using the browser or close it when you are done.");
+                console.log("\n🎉 LOGIN DETECTED! Extracting Account 3 session cookies...");
+
+                const jsonStr = JSON.stringify(cookies, null, 2);
+                fs.writeFileSync(localCookiePath, jsonStr, 'utf-8');
+                console.log(`💾 Saved ${cookies.length} cookies locally to: ${localCookiePath}`);
+
+                saveCookiesToVPS(localCookiePath);
             }
         } catch {
-            // Browser might be closed by user
+            // keep polling
         }
     }, 3000);
 
-    // Keep running until user manually closes the browser
     browser.on('disconnected', async () => {
         clearInterval(interval);
-        console.log("🔴 Browser closed by user. Session script completed.");
+        try {
+            const cookies = await context.cookies().catch(() => []);
+            if (cookies && cookies.length > 5) {
+                const jsonStr = JSON.stringify(cookies, null, 2);
+                fs.writeFileSync(localCookiePath, jsonStr, 'utf-8');
+                saveCookiesToVPS(localCookiePath);
+                console.log("✅ Final session sync completed upon window close!");
+            }
+        } catch {}
+        console.log("🔴 Browser closed by user. Done.");
         process.exit(0);
     });
 }
 
 main().catch(err => {
-    console.error("Fatal error during priming:", err);
+    console.error("Fatal error:", err);
     process.exit(1);
 });

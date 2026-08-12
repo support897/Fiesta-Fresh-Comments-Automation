@@ -225,7 +225,7 @@ export default function CommandCenter() {
             <Users size={24} className="text-indigo-600" />
           </div>
           <div>
-            <div className="text-3xl font-black text-slate-900">2 / 2</div>
+            <div className="text-3xl font-black text-slate-900">3 / 3</div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Profiles</div>
           </div>
         </div>
@@ -249,7 +249,7 @@ export default function CommandCenter() {
           Facebook Profile Cookie Status
         </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Profile 1: Ilse */}
           <div className="border border-slate-100 rounded-2xl p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -258,7 +258,7 @@ export default function CommandCenter() {
               </div>
               <div>
                 <h4 className="text-sm font-bold text-slate-800">Ilse</h4>
-                <p className="text-[10px] text-slate-400">File: 1.json (projects.reports.ilse@gmail.com)</p>
+                <p className="text-[10px] text-slate-400">File: 1.json (50% Main Reply)</p>
               </div>
             </div>
             <span className="px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-100">
@@ -274,7 +274,23 @@ export default function CommandCenter() {
               </div>
               <div>
                 <h4 className="text-sm font-bold text-slate-800">Taylor</h4>
-                <p className="text-[10px] text-slate-400">File: 2.json (ilse2taylor@gmail.com)</p>
+                <p className="text-[10px] text-slate-400">File: 2.json (50% Main Reply)</p>
+              </div>
+            </div>
+            <span className="px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-100">
+              ● Connected
+            </span>
+          </div>
+
+          {/* Profile 3: Account 3 (Website Booster) */}
+          <div className="border border-slate-100 rounded-2xl p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center font-bold text-blue-600">
+                W
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">Website Booster</h4>
+                <p className="text-[10px] text-slate-400">File: account3_cookies.json (100% URL)</p>
               </div>
             </div>
             <span className="px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-100">
