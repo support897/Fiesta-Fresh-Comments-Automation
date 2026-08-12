@@ -392,17 +392,8 @@ async function randomDelay(min: number = 500, max: number = 2000) {
  */
 async function humanType(page: any, selector: string, text: string) {
     await page.click(selector);
-    await randomDelay(300, 800);
-    
-    if (text.includes('\n')) {
-        // Use insertText for multiline text so newlines (\n) do NOT trigger line-by-line Enter submits on Facebook
-        await page.keyboard.insertText(text);
-    } else {
-        for (const char of text) {
-            const typingSpeed = Math.floor(Math.random() * 80) + 35; // 35-115ms per char
-            await page.type(selector, char, { delay: typingSpeed });
-        }
-    }
+    await randomDelay(100, 200);
+    await page.keyboard.insertText(text);
 }
 
 /**
@@ -1116,7 +1107,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     await randomDelay(2000, 3000);
                     continue;
                 }
-                await randomDelay(2000, 4000);
+                await randomDelay(500, 1000);
 
                 // Detect session loss vs inaccessible group
                 if (page.url().includes('/login/')) {
@@ -1149,12 +1140,12 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 if (await discussionTab.isVisible()) {
                     console.log("📂 Switching to Discussion tab...");
                     await discussionTab.click();
-                    await randomDelay(2000, 3000);
+                    await randomDelay(500, 1000);
                 }
 
                 // Human-like browsing
                 await page.mouse.wheel(0, 800);
-                await randomDelay(2000, 4000);
+                await randomDelay(500, 1000);
 
                 // Facebook group posts no longer use role=article; the post text lives in
                 // [data-ad-preview="message"] elements. Wait for them to render.
@@ -1166,11 +1157,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                 let previousPostCount = 0;
                 let currentScrolls = 0;
-                const MAX_SCROLLS = 10; // Scroll deep enough to capture all posts within last 2 days (48h)
+                const MAX_SCROLLS = 3; // Scroll deep enough to capture all posts within last 2 days (48h)
 
                 while (currentScrolls < MAX_SCROLLS) {
                     await page.mouse.wheel(0, 5000); // Scroll down to load historical posts
-                    await randomDelay(2500, 4500); // Wait for post items to render
+                    await randomDelay(800, 1500); // Wait for post items to render
 
                     const tempPostCount = await posts.count();
                     if (tempPostCount === previousPostCount) {
@@ -1285,28 +1276,28 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         try {
                             const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
                             if (await commentBox.isVisible({ timeout: 3000 })) {
-                                await randomDelay(800, 1500);
+                                await randomDelay(100, 300);
                                 await commentBox.click();
-                                await randomDelay(800, 1500);
+                                await randomDelay(100, 300);
                                 await humanType(page, '[role="textbox"]:focus', templateText);
-                                await randomDelay(500, 1000);
+                                await randomDelay(100, 300);
                                 await page.keyboard.press('Enter');
-                                await randomDelay(2000, 3000);
+                                await randomDelay(1000, 1500);
                                 commented = true;
                                 console.log(`✅ Direct comment posted on post ${postID}!`);
                             } else {
                                 const commentBtn = post.locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
                                 if (await commentBtn.isVisible({ timeout: 2000 })) {
                                     await commentBtn.click();
-                                    await randomDelay(1000, 2000);
+                                    await randomDelay(100, 300);
                                     const activeBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
                                     if (await activeBox.isVisible({ timeout: 2000 })) {
                                         await activeBox.click();
-                                        await randomDelay(500, 1000);
+                                        await randomDelay(100, 300);
                                         await humanType(page, '[role="textbox"]:focus', templateText);
-                                        await randomDelay(500, 1000);
+                                        await randomDelay(100, 300);
                                         await page.keyboard.press('Enter');
-                                        await randomDelay(2000, 3000);
+                                        await randomDelay(1000, 1500);
                                         commented = true;
                                         console.log(`✅ Direct comment posted on post ${postID}!`);
                                     }
