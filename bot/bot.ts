@@ -176,12 +176,13 @@ const APPROVE_KEYWORDS = [
     'cleaner', 'cleaning', 'clean', 'bond clean', 'end of lease', 
     'deep clean', 'house clean', 'home clean', 'maid', 'domestic',
     'spring clean', 'move out', 'vacate', 'carpet clean', 'window clean',
+    'office clean', 'office cleaning', 'commercial clean', 'commercial cleaning',
     'price', 'cost', 'how much', 'quote', 'rate', 'recommend', 'recommendation'
 ];
 
 const REJECT_KEYWORDS = [
     'car wash', 'car clean', 'vehicle', 'mobile detailing',
-    'commercial', 'office clean', 'warehouse', 'factory',
+    'warehouse', 'factory',
     'pool clean', 'gutter', 'lawn', 'garden', 'landscaping',
     'plumber', 'electrician', 'handyman', 'painter', 'removalist'
 ];
@@ -344,7 +345,7 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
         console.log("🧠 Running local Semantic Search Fallback...");
         const extract = await getExtractor();
         
-        const idealLead = "I am looking to hire a professional residential house cleaner for a deep clean of my home.";
+        const idealLead = "I am looking to hire a professional cleaner for a house, residential home, office, or commercial space.";
         
         const postOutput = await extract(postText, { pooling: 'mean', normalize: true });
         const idealOutput = await extract(idealLead, { pooling: 'mean', normalize: true });
@@ -363,24 +364,27 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
  * Lead Evaluator (Gemini API with fallback to Groq, then local semantic search)
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
-    const prompt = `You are an AI lead classifier for a residential cleaning business.
+    const prompt = `You are an AI lead classifier for a cleaning business (offering residential, bond, commercial, and office cleaning).
 Your goal is to determine with 100% accuracy if a Facebook post is from a potential customer looking to hire a cleaner.
 
 STRICT RULES:
-1. ONLY return true if they are explicitly asking to hire a cleaner for a residential home, house, or apartment.
+1. ONLY return true if they are explicitly asking to hire a cleaner for a residential home, house, apartment, office, commercial space, or business premises.
 2. Return false if they are OFFERING cleaning services.
-3. Return false if they want car detailing, pool cleaning, commercial/warehouse cleaning, gardening, or any other non-residential house cleaning.
+3. Return false if they want car detailing, pool cleaning, gardening, or any other non-cleaning trade service (plumbing, electrical, moving, etc.).
 4. Return false if they are just asking for a product recommendation.
 
 EXAMPLES (Few-Shot):
 Post: "I am looking for a bond clean on Friday."
 Output: {"is_lead": true, "reason": "Customer is asking to hire a cleaner for a residential bond clean."}
 
+Post: "Looking for a reliable commercial cleaner for our office in Southport twice a week."
+Output: {"is_lead": true, "reason": "Customer is asking to hire a cleaner for an office/commercial space."}
+
 Post: "I am a reliable cleaner with 5 years experience looking for more clients."
 Output: {"is_lead": false, "reason": "The user is offering cleaning services, not looking to hire."}
 
 Post: "Can anyone recommend a good pool cleaner?"
-Output: {"is_lead": false, "reason": "They are looking for a pool cleaner, not a house cleaner."}
+Output: {"is_lead": false, "reason": "They are looking for a pool cleaner, not a house or office cleaner."}
 
 Post text to evaluate:
 """
