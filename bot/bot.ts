@@ -817,14 +817,72 @@ async function runBot(account: FbAccount): Promise<boolean> {
         const currentUrl = page.url();
         const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
         const checkpointVisible = await isSessionCheckpoint(page);
-        const isLogged = !loginFormVisible
+        let isLogged = !loginFormVisible
             && !checkpointVisible
             && !currentUrl.includes('login.php')
             && !currentUrl.includes('two_step_verification')
             && !currentUrl.includes('recaptcha');
+
+        if (!isLogged) {
+            console.log(`🔒 Cookie verification failed for ${fbEmail}. Attempting automated re-login...`);
+            try {
+                // Clear existing session context cookies to get a clean slate
+                await context.clearCookies();
+                await page.goto('https://www.facebook.com/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
+                await randomDelay(2000, 4000);
+                await closeOverlays(page);
+
+                const emailField = page.locator('input[name="email"], #email, input[type="text"]').first();
+                const passField = page.locator('input[name="pass"], #pass, input[type="password"]').first();
+
+                if (await emailField.isVisible() && await passField.isVisible()) {
+                    console.log(`👤 Entering credentials for ${fbEmail}...`);
+                    await emailField.fill(fbEmail);
+                    await randomDelay(500, 1000);
+                    await passField.fill(fbPassword);
+                    await randomDelay(800, 1500);
+
+                    const loginBtn = page.locator('button[name="login"], #loginbutton, button[type="submit"]').first();
+                    if (await loginBtn.isVisible()) {
+                        await loginBtn.click();
+                    } else {
+                        await passField.press('Enter');
+                    }
+                    console.log("⏳ Waiting for landing/feed page...");
+                    await randomDelay(6000, 8000);
+
+                    // Check for 2FA / TOTP challenge (if we ever support it, currently we don't have secrets in env but let's handle checkpoints)
+                    for (const btnText of ["Save", "Remember browser", "Not now", "Continue", "OK"]) {
+                        try {
+                            const btn = page.locator(`button:has-text("${btnText}"), div[role="button"]:has-text("${btnText}")`).first();
+                            if (await btn.isVisible()) {
+                                await btn.click();
+                                await randomDelay(2000, 3000);
+                            }
+                        } catch (e) {}
+                    }
+
+                    // Verify if re-login succeeded
+                    const newUrl = page.url();
+                    const newLoginVisible = await page.locator('input[name="email"], #email, input[name="pass"], #pass').first().isVisible().catch(() => false);
+                    const newCheckpoint = await isSessionCheckpoint(page);
+                    isLogged = !newLoginVisible && !newCheckpoint && !newUrl.includes('login') && !newUrl.includes('checkpoint');
+
+                    if (isLogged) {
+                        const freshCookies = await context.cookies();
+                        await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: freshCookies, updated_at: new Date() });
+                        console.log(`✅ Automated re-login successful for ${fbEmail}! Fresh cookies saved to Supabase.`);
+                    }
+                }
+            } catch (reloginErr: any) {
+                console.error(`❌ Automated re-login failed with exception: ${reloginErr.message}`);
+            }
+        }
+
         if (!restoredSession && isLogged) {
             console.warn(`⚠️ No saved session for ${fbEmail} but logged in — using stale profile cookies from a previous account. Run \`npx tsx prime-session.ts\` to prime this account's session before going live.`);
         }
+
         if (!isLogged) {
             const hasCaptcha = currentUrl.includes('two_step_verification') || page.frames().some((f: any) => f.url().includes('recaptcha'));
             let proofUrl: string | null = null;
