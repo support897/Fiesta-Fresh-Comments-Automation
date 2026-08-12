@@ -655,10 +655,9 @@ async function runBot() {
             await humanType(page, '[name="email"]', fbEmail);
             await randomDelay(800, 1500);
             await humanType(page, '[name="pass"]', fbPassword);
-            await randomDelay(500, 1000);
-            await page.click('[aria-label="Log in"]').catch(async () => {
-                await page.click('input[type="submit"]').catch(() => page.click('[name="login"]'));
-            });
+            await page.keyboard.press('Enter');
+            await randomDelay(1000, 2000);
+            await page.click('button[name="login"], [aria-label="Log in"], [aria-label="Log In"], input[type="submit"]').catch(() => null);
             
             console.log("⏳ Waiting for landing page...");
             await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA?"));
