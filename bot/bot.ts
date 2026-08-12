@@ -772,8 +772,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
         console.log("👤 Login verified. Starting execution...");
         
-        // PHASE 1: Execute approved leads
-        const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
+        const { data: approvedLeads } = await supabase.from('leads').select('*').in('status', ['approved', 'pending']);
         const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
