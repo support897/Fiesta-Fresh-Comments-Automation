@@ -1,20 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f2f5f5;
-  --foreground: #000000;
-  --accent-blue: #0d5c91;
-  --accent-teal: #6997bf;
-  --accent-amber: #f59e0b;
-  --accent-emerald: #0d5c91;
+  --background: #f1f5f9;
+  --foreground: #0f172a;
 }
 
 @theme {
-  --color-primary: #0d5c91;
-  --color-primary-hover: #0b4c79;
-  --color-accent: #6997bf;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
   --font-sans: var(--font-sans);
-  --font-display: var(--font-display);
 }
 
 * {
@@ -32,32 +26,26 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Light scrollbar to match reference */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 10px;
+  background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: #e2e8f0;
   border-radius: 10px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: #cbd5e1;
 }
 
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 12px rgba(59, 130, 246, 0.3); }
-  50% { box-shadow: 0 0 24px rgba(59, 130, 246, 0.6); }
+/* Hide scrollbar for sidebar but keep scrollability */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }
-
-@keyframes float-in {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
