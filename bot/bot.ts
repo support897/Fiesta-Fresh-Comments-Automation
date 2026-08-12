@@ -474,8 +474,17 @@ async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId
             .eq('user_email', 'account3_booster@fiestafresh.com')
             .maybeSingle();
 
-        if (!session || !session.cookies) {
-            console.warn("⚠️ Account 3 booster session not found in Supabase. Please prime Account 3.");
+        let cookies = session?.cookies;
+        if (!cookies) {
+            const fs = await import('fs');
+            const localFile = path.join(__dirname, 'account3_cookies.json');
+            if (fs.existsSync(localFile)) {
+                cookies = JSON.parse(fs.readFileSync(localFile, 'utf-8'));
+            }
+        }
+
+        if (!cookies) {
+            console.warn("⚠️ Account 3 booster cookies not found. Please prime Account 3.");
             return;
         }
 
@@ -483,13 +492,13 @@ async function postWebsiteUrlBoosterReply(browser: any, groupUrl: string, postId
             viewport: { width: 1280, height: 900 },
             userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         });
-        await boosterContext.addCookies(session.cookies);
+        await boosterContext.addCookies(cookies);
 
         const boosterPage = await boosterContext.newPage();
         await boosterPage.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
         await randomDelay(3000, 5000);
 
-        const boosterCommentText = "You can check out our website, read our reviews and even book in 60 seconds right here 👉 fiestafreshcleaning.com/book 🏡✨";
+        const boosterCommentText = "https://www.fiestafreshcleaning.com/";
 
         const commentBox = boosterPage.locator('[aria-label="Write a comment"], [role="textbox"]').first();
         if (await commentBox.isVisible({ timeout: 4000 })) {
