@@ -644,6 +644,20 @@ async function runBot(account: FbAccount): Promise<boolean> {
     let restoredSession = false;
     const { data: savedSession } = await supabase.from('sessions').select('cookies').eq('user_email', fbEmail).order('updated_at', { ascending: false }).limit(1).maybeSingle();
     if (savedSession?.cookies && Array.isArray(savedSession.cookies)) {
+
+        // --- Early checkpoint detection ---
+        // If saved cookies contain 'checkpoint' but are missing 'c_user' and 'xs',
+        // this account is Facebook-locked. Skip it immediately so account rotation
+        // can try the next healthy account without wasting a full browser launch.
+        const cookieNames = savedSession.cookies.map((c: any) => c.name);
+        const hasCheckpoint = cookieNames.includes('checkpoint');
+        const hasAuthTokens = cookieNames.includes('c_user') && cookieNames.includes('xs');
+        if (hasCheckpoint && !hasAuthTokens) {
+            console.warn(`⚠️ ${fbEmail} has a Facebook CHECKPOINT cookie and is missing c_user/xs — account is locked. Skipping this account, rotating to next.`);
+            await context.close();
+            return false;
+        }
+
         try {
             // Normalise sameSite values: Chrome exports "no_restriction"/"lax"/"strict"/"unspecified"
             // but Playwright requires exactly "None"|"Lax"|"Strict".
