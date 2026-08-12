@@ -29,7 +29,9 @@ async function sendAlertEmail(subject: string, text: string) {
     }
 }
 
-let lastDailyReportDate: string = '';
+import * as fs from 'fs';
+let lastDailyReportDate = '';
+let reportFilePath = '';
 
 async function sendDailyReportEmail() {
     const user = process.env.ALERT_EMAIL || "projects.reports.ilse@gmail.com";
@@ -177,13 +179,17 @@ async function sendDailyReportEmail() {
 async function checkAndSendDailyReport() {
     try {
         const now = new Date();
-        // Gold Coast / Brisbane timezone (UTC+10)
-        const localNow = new Date(now.getTime() + (10 * 60 * 60 * 1000));
-        const currentHour = localNow.getUTCHours(); // 18 = 6:00 PM
-        const todayStr = localNow.toISOString().split('T')[0] || '';
+        // Explicitly get hour and date in Australia/Brisbane timezone (Gold Coast/Brisbane)
+        const currentHour = parseInt(now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
+        const todayStr = now.toLocaleDateString('en-US', { timeZone: 'Australia/Brisbane' });
 
         if (currentHour === 18 && lastDailyReportDate !== todayStr) {
             lastDailyReportDate = todayStr;
+            try {
+                fs.writeFileSync(reportFilePath, todayStr, 'utf8');
+            } catch (err) {
+                console.error("⚠️ Failed to write last_report_date.txt:", err);
+            }
             console.log("📊 Triggering Daily 6:00 PM Fiesta Fresh Gmail Report...");
             await sendDailyReportEmail();
         }
@@ -194,6 +200,16 @@ async function checkAndSendDailyReport() {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Initialize file persistence variables after __dirname is declared
+reportFilePath = path.join(__dirname, 'last_report_date.txt');
+try {
+    if (fs.existsSync(reportFilePath)) {
+        lastDailyReportDate = fs.readFileSync(reportFilePath, 'utf8').trim();
+    }
+} catch (e) {
+    console.error("⚠️ Failed to read last_report_date.txt:", e);
+}
 
 // Load environment variables with fallback paths
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -903,9 +919,11 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
             // Sync 'Down' status to database by setting cookies to empty array
             console.log(`📡 Syncing cookies status to 'Down' in Supabase for ${fbEmail}...`);
-            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: [], updated_at: new Date() }).catch((err) => {
+            try {
+                await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: [], updated_at: new Date() });
+            } catch (err: any) {
                 console.error(`⚠️ Failed to sync Down status to database: ${err.message}`);
-            });
+            }
 
             // Send JUST ONE email alert per failure incident until session is restored
             if (!sessionAlertSent) {
