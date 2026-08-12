@@ -364,34 +364,45 @@ async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
  * Lead Evaluator (Gemini API with fallback to Groq, then local semantic search)
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
-    const prompt = `You are an AI lead classifier for a cleaning business (offering residential, bond, commercial, and office cleaning).
-Your goal is to determine with 100% accuracy if a Facebook post is from a potential customer looking to hire a cleaner.
+    const prompt = `You are an AI lead classifier for a cleaning business (offering residential house cleaning, bond/end of lease cleaning, deep cleaning, commercial cleaning, office cleaning).
+Your goal is to determine with 100% accuracy if a Facebook post is from a potential customer looking to hire a cleaner or asking for cleaner recommendations.
 
-STRICT RULES:
-1. ONLY return true if they are explicitly asking to hire a cleaner for a residential home, house, apartment, office, commercial space, or business premises.
-2. Return false if they are OFFERING cleaning services.
-3. Return false if they want car detailing, pool cleaning, gardening, or any other non-cleaning trade service (plumbing, electrical, moving, etc.).
-4. Return false if they are just asking for a product recommendation.
+MATCH CRITERIA (Return true for is_lead):
+1. DIRECT HIRE: Person explicitly looking to hire a cleaner ("Need a cleaner for Friday", "Looking for a bond clean in Gold Coast", "Who can clean my office?").
+2. RECOMMENDATION REQUESTS: Person asking the community for cleaner recommendations ("Can anyone recommend a good cleaner?", "Any reliable house cleaners near Southport?", "Looking for recommendations for an office clean", "Who is the best cleaner around?").
+3. PRICE / QUOTE INQUIRIES: Person asking about cost/rates for cleaning services ("How much for a 3 bedroom end of lease clean?", "Looking for quotes for domestic cleaning").
+4. ALL CLEANING TYPES: Residential home/house/apartment, bond/vacate, spring clean, carpet clean, window clean, office clean, commercial space.
+
+DISQUALIFY CRITERIA (Return false for is_lead):
+1. SERVICE SELLERS: Person offering or advertising cleaning services ("I am a cleaner available...", "Offering cleaning services...", "DM me for bookings", "We are a local cleaning company").
+2. NON-CLEANING TRADES: Requests for car detailing/car wash, pool cleaning, gardening, lawn mowing, plumbing, electrical, handyman, moving/removalist.
+3. PRODUCT / DIY INQUIRIES: Asking how to clean a stain themselves or asking for cleaning product recommendations ("What's the best product to clean oven?", "How do I remove mold from grout?").
 
 EXAMPLES (Few-Shot):
-Post: "I am looking for a bond clean on Friday."
-Output: {"is_lead": true, "reason": "Customer is asking to hire a cleaner for a residential bond clean."}
+Post: "Can anyone recommend a reliable house cleaner near Robina?"
+Output: {"is_lead": true, "reason": "Asking community for house cleaner recommendations."}
 
-Post: "Looking for a reliable commercial cleaner for our office in Southport twice a week."
-Output: {"is_lead": true, "reason": "Customer is asking to hire a cleaner for an office/commercial space."}
+Post: "I need a bond clean done this Thursday in Southport. 3 beds 2 baths."
+Output: {"is_lead": true, "reason": "Direct request to hire a bond cleaner."}
 
-Post: "I am a reliable cleaner with 5 years experience looking for more clients."
-Output: {"is_lead": false, "reason": "The user is offering cleaning services, not looking to hire."}
+Post: "Looking for recommendations for a reliable commercial cleaner for our office in Southport twice a week."
+Output: {"is_lead": true, "reason": "Asking for recommendations for an office/commercial cleaner."}
 
-Post: "Can anyone recommend a good pool cleaner?"
-Output: {"is_lead": false, "reason": "They are looking for a pool cleaner, not a house or office cleaner."}
+Post: "I am an experienced domestic cleaner with openings available this week! PM for rates."
+Output: {"is_lead": false, "reason": "User is offering cleaning services, not looking to hire."}
+
+Post: "What is the best spray to remove mold from bathroom tiles?"
+Output: {"is_lead": false, "reason": "Product/DIY question, not looking to hire a service."}
+
+Post: "Can anyone recommend a good car detailer?"
+Output: {"is_lead": false, "reason": "Looking for car detailing, not house or office cleaning."}
 
 Post text to evaluate:
 """
 ${postText}
 """
 
-You must respond in valid JSON format only, exactly like this:
+You must respond in valid JSON format only:
 {"is_lead": true, "reason": "brief explanation"}`;
 
     const geminiKey = process.env.GEMINI_API_KEY;
@@ -827,28 +838,92 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             continue;
                         }
 
+                        // Pick template text
+                        let templateText = defaultTemplateText;
+                        if (templates && templates.length > 0) {
+                            const randomIdx = Math.floor(Math.random() * templates.length);
+                            templateText = templates[randomIdx].content;
+                        }
+
                         if (DRY_RUN) {
-                            console.log(`[DRY RUN] Would queue/comment on lead: ${postText.substring(0, 60)}...`);
+                            console.log(`[DRY RUN] Would comment on lead (${postID}): ${postText.substring(0, 60)}...`);
+                            console.log(`[DRY RUN] Comment: ${templateText.substring(0, 80)}...`);
+                            await supabase.from('leads').insert({
+                                post_id: postID,
+                                group_url: group.url,
+                                post_text: postText,
+                                status: 'posted'
+                            });
+                            await supabase.from('replies_log').insert({
+                                post_id: postID,
+                                group_url: group.url,
+                                comment_id: `dryrun_${Date.now()}`,
+                                replied_at: new Date()
+                            });
                             continue;
                         }
 
-                        console.log("🎯 Found valid lead! Queuing as pending...");
+                        console.log("⚡ Auto-accepted lead! Attempting immediate comment...");
+                        await closeOverlays(page);
+                        let commented = false;
+
+                        try {
+                            const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                            if (await commentBox.isVisible({ timeout: 3000 })) {
+                                await randomDelay(800, 1500);
+                                await commentBox.click();
+                                await randomDelay(800, 1500);
+                                await humanType(page, '[role="textbox"]:focus', templateText);
+                                await randomDelay(500, 1000);
+                                await page.keyboard.press('Enter');
+                                await randomDelay(2000, 3000);
+                                commented = true;
+                                console.log(`✅ Direct comment posted on post ${postID}!`);
+                            } else {
+                                const commentBtn = post.locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
+                                if (await commentBtn.isVisible({ timeout: 2000 })) {
+                                    await commentBtn.click();
+                                    await randomDelay(1000, 2000);
+                                    const activeBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
+                                    if (await activeBox.isVisible({ timeout: 2000 })) {
+                                        await activeBox.click();
+                                        await randomDelay(500, 1000);
+                                        await humanType(page, '[role="textbox"]:focus', templateText);
+                                        await randomDelay(500, 1000);
+                                        await page.keyboard.press('Enter');
+                                        await randomDelay(2000, 3000);
+                                        commented = true;
+                                        console.log(`✅ Direct comment posted on post ${postID}!`);
+                                    }
+                                }
+                            }
+                        } catch (commentErr: any) {
+                            console.error(`⚠️ Could not post comment directly: ${commentErr.message?.slice(0, 80)}`);
+                        }
+
+                        // Write to replies_log to ensure no duplicate comments
+                        await supabase.from('replies_log').insert({
+                            post_id: postID,
+                            group_url: group.url,
+                            comment_id: `comment_${Date.now()}`,
+                            replied_at: new Date()
+                        });
 
                         const { error: insertError } = await supabase.from('leads').insert({
                             post_id: postID,
                             group_url: group.url,
                             post_text: postText,
-                            status: 'pending'
+                            status: commented ? 'posted' : 'approved'
                         });
 
                         if (insertError) {
                             if (insertError.message?.includes('duplicate')) {
-                                console.log("⏭️ Lead already exists. Skipping.");
+                                console.log("⏭️ Lead already logged.");
                             } else {
-                                console.error("❌ Failed to queue lead:", insertError.message);
+                                console.error("❌ Failed to log lead:", insertError.message);
                             }
                         } else {
-                            console.log(`✅ Lead logged as pending.`);
+                            console.log(`✅ Lead logged as ${commented ? 'posted' : 'approved'}.`);
                         }
                     }
                     
