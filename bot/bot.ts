@@ -416,10 +416,9 @@ async function closeOverlays(page: any) {
     for (const selector of overlaySelectors) {
         try {
             const btn = page.locator(selector).first();
-            if (await btn.isVisible({ timeout: 2000 })) {
+            if (await btn.isVisible({ timeout: 300 })) {
                 console.log(`🍪 Closing overlay (${selector})`);
-                await btn.click();
-                await randomDelay(1000, 2000);
+                await btn.click({ timeout: 2000 }).catch(() => {});
             }
         } catch (e) {
             // Overlay not found, continue
@@ -1007,8 +1006,10 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             
                             if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
                                 console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
+                                console.log(`📍 Step: closeOverlays`);
                                 await closeOverlays(page);
-                                
+                                console.log(`📍 Step: finding commentBox`);
+
                             let commentBox = posts.nth(i).locator('[aria-label*="comment" i], [aria-label*="Write" i], [role="textbox"]').first();
                             if (!(await commentBox.isVisible())) {
                                 const commentBtn = posts.nth(i).locator('[aria-label*="Comment" i], [aria-label*="Leave a comment" i], span:has-text("Comment")').first();
@@ -1019,17 +1020,21 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             }
                             
                             const activeBox = page.locator('[role="textbox"]:focus, [aria-label*="Write a comment" i], [role="textbox"]').first();
+                            console.log(`📍 Step: waitFor activeBox`);
                             try {
                                 await activeBox.waitFor({ state: 'visible', timeout: 4000 });
                             } catch (e) {}
+                            console.log(`📍 Step: check activeBox visible`);
 
                             if (await activeBox.isVisible()) {
+                                console.log(`📍 Step: clicking activeBox`);
                                 await activeBox.click({ timeout: 3000 }).catch(() => {});
+                                console.log(`📍 Step: inserting text`);
                                 await page.keyboard.insertText(templateText);
-                                await randomDelay(500, 1000);
+                                console.log(`📍 Step: pressing Enter`);
                                 await page.keyboard.press('Enter');
-                                await randomDelay(2000, 3000);
-                                
+                                console.log(`📍 Step: logging to Supabase`);
+
                                 const commentPageUrl = page.url();
                                 const { error: replyErr } = await supabase.from('replies_log').insert({
                                     post_id: lead.post_id,
