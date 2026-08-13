@@ -380,20 +380,18 @@ const DISQUALIFIER_KEYWORDS = [
 ];
 
 /**
- * Random delay for human-like behavior
+ * Capped minimal delay for reliability but fast bot execution
  */
-async function randomDelay(min: number = 10, max: number = 50) {
-    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
-    const capped = Math.min(delay, 50);
-    await new Promise(resolve => setTimeout(resolve, capped));
+async function randomDelay(min: number = 0, max: number = 10) {
+    // Delays reduced to practically zero to operate as bot lightning fast
+    await new Promise(resolve => setTimeout(resolve, 10));
 }
 
 /**
- * Human-like typing with multiline single-comment preservation
+ * Super fast typing - instantly inserts text
  */
 async function humanType(page: any, selector: string, text: string) {
-    await page.click(selector);
-    await randomDelay(100, 200);
+    await page.click(selector, { force: true }).catch(() => {});
     await page.keyboard.insertText(text);
 }
 
@@ -1051,7 +1049,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             await randomDelay(4000, 6000);
                             await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
                         } else {
-                            console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}`);
+                            console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}. Marking status to prevent infinite loop.`);
+                            await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
                         }
                     } else {
                         // ── SCROLL PATH: hash-based leads — navigate to group and scroll ──
