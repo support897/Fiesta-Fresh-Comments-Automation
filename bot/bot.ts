@@ -975,120 +975,149 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         continue;
                     }
                     
-                    console.log(`📍 Navigating to group: ${lead.group_url?.slice(0, 80)}`);
-                    await Promise.race([
-                        page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 }),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('Hard goto timeout 30s')), 32000))
-                    ]);
-                    console.log(`📍 Page committed. Waiting for feed...`);
-                    await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 8000 }).catch(() => {});
-                    console.log(`📍 Feed ready. Starting scroll search...`);
-                    
-                    // Scroll to find post
-                    for (let scroll = 0; scroll < 5; scroll++) {
-                        console.log(`📍 Scroll ${scroll + 1}/5...`);
-                        await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
-                        await new Promise(r => setTimeout(r, 500)); // allow FB content to settle
-                        const posts = page.locator('[data-ad-preview="message"], [role="article"]');
-                        let count = await posts.count();
-                        if (count === 0) {
-                            // Fallback selector for posts container
-                            count = await page.locator('div[role="feed"] > div').count();
+                    const isNumericId = /^\d+$/.test(String(lead.post_id));
+
+                    if (isNumericId) {
+                        // ── FAST PATH: navigate directly to the post permalink ──
+                        const postUrl = `${lead.group_url.replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        console.log(`📍 Direct post URL: ${postUrl.slice(0, 90)}`);
+                        await Promise.race([
+                            page.goto(postUrl, { waitUntil: 'commit', timeout: 30000 }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
+                        ]);
+                        console.log(`📍 Post page committed. Closing overlays...`);
+                        await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
+
+                        const iv = (loc: any) => Promise.race([
+                            loc.isVisible(),
+                            new Promise<boolean>(r => setTimeout(() => r(false), 500))
+                        ]);
+
+                        // On direct post page the comment box is present in DOM
+                        const commentInput = page.locator(
+                            '[contenteditable="true"][aria-label*="comment" i], ' +
+                            '[role="textbox"][aria-label*="comment" i], ' +
+                            '[contenteditable="true"]'
+                        ).first();
+                        console.log(`📍 Waiting for comment input (10s)...`);
+                        try { await commentInput.waitFor({ state: 'visible', timeout: 10000 }); } catch(e) {}
+                        const inputReady = await iv(commentInput);
+                        console.log(`📍 Comment input ready: ${inputReady}`);
+
+                        if (inputReady) {
+                            await commentInput.click({ timeout: 3000 }).catch(() => {});
+                            console.log(`📍 Inserting text...`);
+                            await page.keyboard.insertText(templateText);
+                            console.log(`📍 Pressing Enter...`);
+                            await page.keyboard.press('Enter');
+
+                            const commentPageUrl = page.url();
+                            const { error: replyErr } = await supabase.from('replies_log').insert({
+                                post_id: lead.post_id,
+                                group_url: lead.group_url,
+                                comment_id: `comment_${Date.now()}`,
+                                comment_url: commentPageUrl,
+                                replied_at: new Date()
+                            });
+                            const { data: updatedLeads, error: leadErr } = await supabase
+                                .from('leads')
+                                .update({ status: 'posted' })
+                                .eq('post_id', lead.post_id)
+                                .select();
+                            console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
+
+                            console.log(`⏳ Pausing before Account 3 booster...`);
+                            await randomDelay(4000, 6000);
+                            await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                        } else {
+                            console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}`);
                         }
-                        let found = false;
+                    } else {
+                        // ── SCROLL PATH: hash-based leads — navigate to group and scroll ──
+                        console.log(`📍 Group page: ${lead.group_url?.slice(0, 80)}`);
+                        await Promise.race([
+                            page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
+                        ]);
+                        console.log(`📍 Page committed. Waiting for feed...`);
+                        await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 8000 }).catch(() => {});
+                        console.log(`📍 Feed ready. Starting scroll search...`);
 
-                        for (let i = 0; i < count; i++) {
-                            const postText = (await posts.nth(i).innerText({ timeout: 2000 }).catch(() => '')).trim();
-                            const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
-                            const targetSnippet = norm(lead.post_text).slice(0, 35);
-                            
-                            if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
-                                console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
-                                console.log(`📍 Step: closeOverlays`);
-                                await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
-                                console.log(`📍 Step: finding commentBox`);
+                        for (let scroll = 0; scroll < 5; scroll++) {
+                            console.log(`📍 Scroll ${scroll + 1}/5...`);
+                            await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
+                            await new Promise(r => setTimeout(r, 500));
+                            const posts = page.locator('[data-ad-preview="message"], [role="article"]');
+                            let count = await posts.count();
+                            if (count === 0) count = await page.locator('div[role="feed"] > div').count();
+                            let found = false;
 
-                            // Helper: isVisible with hard 500ms timeout
-                            const iv = (loc: any) => Promise.race([
-                                loc.isVisible(),
-                                new Promise<boolean>(r => setTimeout(() => r(false), 500))
-                            ]);
+                            for (let i = 0; i < count; i++) {
+                                const postText = (await posts.nth(i).innerText({ timeout: 2000 }).catch(() => '')).trim();
+                                const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
+                                const targetSnippet = norm(lead.post_text).slice(0, 35);
+                                if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
+                                    console.log(`🎯 Found post! Commenting via scroll path...`);
+                                    await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
 
-                            // Scroll post into view first
-                            await posts.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-                            await new Promise(r => setTimeout(r, 300));
+                                    const iv = (loc: any) => Promise.race([
+                                        loc.isVisible(),
+                                        new Promise<boolean>(r => setTimeout(() => r(false), 500))
+                                    ]);
+                                    await posts.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+                                    await new Promise(r => setTimeout(r, 300));
 
-                            // Try to find and click Comment button - log results
-                            const commentBox = posts.nth(i).locator('[role="textbox"], [contenteditable="true"], [aria-label*="Write" i]').first();
-                            const commentBoxVisible = await iv(commentBox);
-                            console.log(`📍 commentBox visible: ${commentBoxVisible}`);
+                                    const commentBox = posts.nth(i).locator('[role="textbox"], [contenteditable="true"], [aria-label*="Write" i]').first();
+                                    if (!(await iv(commentBox))) {
+                                        const clicked = await Promise.race([
+                                            posts.nth(i).evaluate((el: Element) => {
+                                                const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i]') as HTMLElement | null;
+                                                if (btn) { btn.click(); return true; }
+                                                return false;
+                                            }).catch(() => false),
+                                            new Promise<boolean>(r => setTimeout(() => r(false), 2000))
+                                        ]);
+                                        console.log(`📍 JS comment btn click: ${clicked}`);
+                                        await new Promise(r => setTimeout(r, 2000));
+                                    }
 
-                            if (!commentBoxVisible) {
-                                // Try clicking "Comment" via JS evaluate on the post element
-                                const clicked = await Promise.race([
-                                    posts.nth(i).evaluate((el: Element) => {
-                                        const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i], div[aria-label*="comment" i]') as HTMLElement | null;
-                                        if (btn) { btn.click(); return true; }
-                                        return false;
-                                    }).catch(() => false),
-                                    new Promise<boolean>(r => setTimeout(() => r(false), 2000))
-                                ]);
-                                console.log(`📍 JS comment btn click: ${clicked}`);
-                                await new Promise(r => setTimeout(r, 2000)); // let page settle after click
+                                    const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
+                                    try { await activeBox.waitFor({ state: 'visible', timeout: 10000 }); } catch(e) {}
+                                    const boxReady = await iv(activeBox);
+                                    console.log(`📍 activeBox ready: ${boxReady}`);
+
+                                    if (boxReady) {
+                                        await activeBox.click({ timeout: 3000 }).catch(() => {});
+                                        await page.keyboard.insertText(templateText);
+                                        await page.keyboard.press('Enter');
+
+                                        const commentPageUrl = page.url();
+                                        const { error: replyErr } = await supabase.from('replies_log').insert({
+                                            post_id: lead.post_id,
+                                            group_url: lead.group_url,
+                                            comment_id: `comment_${Date.now()}`,
+                                            comment_url: commentPageUrl,
+                                            replied_at: new Date()
+                                        });
+                                        const { data: updatedLeads, error: leadErr } = await supabase
+                                            .from('leads')
+                                            .update({ status: 'posted' })
+                                            .eq('post_id', lead.post_id)
+                                            .select();
+                                        console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
+                                        found = true;
+
+                                        await randomDelay(4000, 6000);
+                                        await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                                        break;
+                                    }
+                                }
                             }
-
-                            // Look for textbox at page level with broad selectors
-                            const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
-                            console.log(`📍 Step: waitFor activeBox`);
-                            try {
-                                await activeBox.waitFor({ state: 'visible', timeout: 10000 });
-                            } catch (e) {}
-                            const boxReady = await iv(activeBox);
-                            console.log(`\ud83d\udccd Step: activeBox ready: ${boxReady}`);
-
-                            if (boxReady) {
-                                console.log(`\ud83d\udccd Step: clicking activeBox`);
-
-                                await activeBox.click({ timeout: 3000 }).catch(() => {});
-                                console.log(`📍 Step: inserting text`);
-                                await page.keyboard.insertText(templateText);
-                                console.log(`📍 Step: pressing Enter`);
-                                await page.keyboard.press('Enter');
-                                console.log(`📍 Step: logging to Supabase`);
-
-                                const commentPageUrl = page.url();
-                                const { error: replyErr } = await supabase.from('replies_log').insert({
-                                    post_id: lead.post_id,
-                                    group_url: lead.group_url,
-                                    comment_id: `comment_${Date.now()}`,
-                                    comment_url: commentPageUrl,
-                                    replied_at: new Date()
-                                });
-                                
-                                const { data: updatedLeads, error: leadErr } = await supabase
-                                    .from('leads')
-                                    .update({ status: 'posted' })
-                                    .eq('post_id', lead.post_id)
-                                    .select();
-                                console.log(`✅ Comment posted for lead ${lead.post_id}! rows updated: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
-
-                                found = true;
-
-                                // ✅ Account 3 booster — fires 5s after every successful main-account comment
-                                console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
-                                await randomDelay(4000, 6000);
-                                await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
-
-                                break;
-                            } else {
-                                console.warn(`⚠️ Could not locate visible comment box for lead ${lead.post_id}.`);
-                            }
-                            }
+                            if (found) break;
                         }
-                        if (found) break;
                     }
                 } catch (leadErr: any) {
-                    console.warn(`⚠️ Skipping lead ${lead.post_id} due to navigation/execution error: ${leadErr.message?.slice(0, 100)}`);
+                    console.warn(`⚠️ Skipping lead ${lead.post_id} due to error: ${leadErr.message?.slice(0, 100)}`);
                     continue;
                 }
             }
