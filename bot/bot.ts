@@ -1025,13 +1025,16 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                             if (!commentBoxVisible) {
                                 // Try clicking "Comment" via JS evaluate on the post element
-                                const clicked = await posts.nth(i).evaluate((el: Element) => {
-                                    const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i], div[aria-label*="comment" i]') as HTMLElement | null;
-                                    if (btn) { btn.click(); return true; }
-                                    return false;
-                                }).catch(() => false);
+                                const clicked = await Promise.race([
+                                    posts.nth(i).evaluate((el: Element) => {
+                                        const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i], div[aria-label*="comment" i]') as HTMLElement | null;
+                                        if (btn) { btn.click(); return true; }
+                                        return false;
+                                    }).catch(() => false),
+                                    new Promise<boolean>(r => setTimeout(() => r(false), 2000))
+                                ]);
                                 console.log(`📍 JS comment btn click: ${clicked}`);
-                                await new Promise(r => setTimeout(r, 500));
+                                await new Promise(r => setTimeout(r, 2000)); // let page settle after click
                             }
 
                             // Look for textbox at page level with broad selectors
@@ -1058,7 +1061,6 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                     post_id: lead.post_id,
                                     group_url: lead.group_url,
                                     comment_id: `comment_${Date.now()}`,
-                                    account_name: fbEmail,
                                     comment_url: commentPageUrl,
                                     replied_at: new Date()
                                 });
