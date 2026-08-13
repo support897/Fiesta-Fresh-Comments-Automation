@@ -1367,32 +1367,23 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         console.log("⚡ Auto-accepted lead! Attempting immediate comment...");
                         await closeOverlays(page);
                         let commented = false;
-
                         try {
                             const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
-                            if (await commentBox.isVisible({ timeout: 3000 })) {
-                                await randomDelay(100, 300);
-                                await commentBox.click();
-                                await randomDelay(100, 300);
-                                await humanType(page, '[role="textbox"]:focus', templateText);
-                                await randomDelay(100, 300);
+                            if (await commentBox.isVisible({ timeout: 1000 })) {
+                                await commentBox.click({ force: true }).catch(() => {});
+                                await page.keyboard.insertText(templateText);
                                 await page.keyboard.press('Enter');
-                                await randomDelay(1000, 1500);
                                 commented = true;
                                 console.log(`✅ Direct comment posted on post ${postID}!`);
                             } else {
                                 const commentBtn = post.locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
-                                if (await commentBtn.isVisible({ timeout: 2000 })) {
-                                    await commentBtn.click();
-                                    await randomDelay(100, 300);
+                                if (await commentBtn.isVisible({ timeout: 1000 })) {
+                                    await commentBtn.click({ force: true }).catch(() => {});
                                     const activeBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
-                                    if (await activeBox.isVisible({ timeout: 2000 })) {
-                                        await activeBox.click();
-                                        await randomDelay(100, 300);
-                                        await humanType(page, '[role="textbox"]:focus', templateText);
-                                        await randomDelay(100, 300);
+                                    if (await activeBox.isVisible({ timeout: 1000 })) {
+                                        await activeBox.click({ force: true }).catch(() => {});
+                                        await page.keyboard.insertText(templateText);
                                         await page.keyboard.press('Enter');
-                                        await randomDelay(1000, 1500);
                                         commented = true;
                                         console.log(`✅ Direct comment posted on post ${postID}!`);
                                     }
