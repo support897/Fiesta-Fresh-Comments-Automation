@@ -625,31 +625,49 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             }
             return route.continue();
         });
-        await boosterPage.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await randomDelay(3000, 5000);
+
+        const isNumericId = /^\d+$/.test(String(postId));
+        const targetUrl = isNumericId
+            ? `${groupUrl.replace(/\/$/, '')}/posts/${postId}`
+            : groupUrl;
+
+        console.log(`🌐 Booster landing on URL: ${targetUrl.slice(0, 90)}`);
+        await boosterPage.goto(targetUrl, { waitUntil: 'commit', timeout: 45000 });
+        await new Promise(r => setTimeout(r, 2000));
 
         const boosterCommentText = "https://www.fiestafreshcleaning.com/";
 
-        const commentBox = boosterPage.locator('[aria-label="Write a comment"], [role="textbox"]').first();
-        if (await commentBox.isVisible({ timeout: 4000 })) {
-            await commentBox.click();
-            await randomDelay(800, 1500);
-            await humanType(boosterPage, '[role="textbox"]:focus', boosterCommentText);
-            await randomDelay(500, 1000);
+        const commentPlaceholder = boosterPage.locator(
+            '[aria-label*="Write a comment" i], ' +
+            '[aria-label*="Leave a comment" i], ' +
+            '[data-lexical-editor], ' +
+            '[contenteditable]'
+        ).first();
+        await commentPlaceholder.click({ timeout: 3000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 500));
+
+        const commentInput = boosterPage.locator(
+            '[contenteditable="true"][aria-label*="comment" i], ' +
+            '[role="textbox"][aria-label*="comment" i], ' +
+            '[contenteditable="true"]'
+        ).first();
+
+        if (await commentInput.isVisible({ timeout: 5000 })) {
+            await commentInput.click({ force: true }).catch(() => {});
+            await boosterPage.keyboard.insertText(boosterCommentText);
             await boosterPage.keyboard.press('Enter');
-            await randomDelay(2000, 3000);
             console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
 
-            // Grab the current page URL to capture the post permalink
             const boosterPageUrl = boosterPage.url();
             await supabase.from('replies_log').insert({
                 post_id: postId,
                 group_url: groupUrl,
                 comment_id: `booster_${Date.now()}`,
-                account_name: 'Website Booster',
                 comment_url: boosterPageUrl,
                 replied_at: new Date()
             });
+        } else {
+            console.warn(`⚠️ Booster comment box not found on post ${postId}.`);
         }
         await boosterContext.close();
         await boosterBrowser.close();
