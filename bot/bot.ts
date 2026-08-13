@@ -658,12 +658,10 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             await boosterPage.keyboard.press('Enter');
             console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
 
-            const boosterPageUrl = boosterPage.url();
             await supabase.from('replies_log').insert({
                 post_id: postId,
                 group_url: groupUrl,
                 comment_id: `booster_${Date.now()}`,
-                comment_url: boosterPageUrl,
                 replied_at: new Date()
             });
         } else {
@@ -957,7 +955,20 @@ async function runBot(account: FbAccount): Promise<boolean> {
         console.log("👤 Login verified. Starting execution...");
         
         // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
-        const { data: approvedLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        const { data: rawLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        
+        // Fetch replies_log to filter out already executed leads (RLS update proof)
+        const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
+        const repliedPostIds = new Set((postedReplies || []).map(r => String(r.post_id)));
+
+        const approvedLeads = (rawLeads || []).filter(lead => {
+            const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
+            if (isAlreadyReplied) {
+                console.log(`⏭️ Lead ${lead.post_id} already has a logged reply in replies_log. Skipping execution.`);
+            }
+            return !isAlreadyReplied;
+        });
+
         const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
 We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
@@ -1048,12 +1059,10 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             console.log(`📍 Pressing Enter...`);
                             await page.keyboard.press('Enter');
 
-                            const commentPageUrl = page.url();
                             const { error: replyErr } = await supabase.from('replies_log').insert({
                                 post_id: lead.post_id,
                                 group_url: lead.group_url,
                                 comment_id: `comment_${Date.now()}`,
-                                comment_url: commentPageUrl,
                                 replied_at: new Date()
                             });
                             const { data: updatedLeads, error: leadErr } = await supabase
@@ -1129,12 +1138,10 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                         await page.keyboard.insertText(templateText);
                                         await page.keyboard.press('Enter');
 
-                                        const commentPageUrl = page.url();
                                         const { error: replyErr } = await supabase.from('replies_log').insert({
                                             post_id: lead.post_id,
                                             group_url: lead.group_url,
                                             comment_id: `comment_${Date.now()}`,
-                                            comment_url: commentPageUrl,
                                             replied_at: new Date()
                                         });
                                         const { data: updatedLeads, error: leadErr } = await supabase
@@ -1413,13 +1420,10 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                         // Write to replies_log only if main account actually commented
                         if (commented) {
-                            const scanPageUrl = page.url();
                             await supabase.from('replies_log').insert({
                                 post_id: postID,
                                 group_url: group.url,
                                 comment_id: `comment_${Date.now()}`,
-                                account_name: fbEmail,
-                                comment_url: scanPageUrl,
                                 replied_at: new Date()
                             });
                         }

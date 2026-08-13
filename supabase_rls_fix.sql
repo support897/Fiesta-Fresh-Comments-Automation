@@ -45,16 +45,20 @@ CREATE POLICY "groups_delete" ON public.groups FOR DELETE USING (true);
 -- ============================================
 DROP POLICY IF EXISTS "leads_select" ON public.leads;
 DROP POLICY IF EXISTS "leads_insert" ON public.leads;
+DROP POLICY IF EXISTS "leads_update" ON public.leads;
 CREATE POLICY "leads_select" ON public.leads FOR SELECT USING (true);
 CREATE POLICY "leads_insert" ON public.leads FOR INSERT WITH CHECK (true);
+CREATE POLICY "leads_update" ON public.leads FOR UPDATE USING (true);
 
 -- ============================================
 -- REPLIES_LOG: bot writes; dashboard reads
 -- ============================================
 DROP POLICY IF EXISTS "replies_select" ON public.replies_log;
 DROP POLICY IF EXISTS "replies_insert" ON public.replies_log;
+DROP POLICY IF EXISTS "replies_update" ON public.replies_log;
 CREATE POLICY "replies_select" ON public.replies_log FOR SELECT USING (true);
 CREATE POLICY "replies_insert" ON public.replies_log FOR INSERT WITH CHECK (true);
+CREATE POLICY "replies_update" ON public.replies_log FOR UPDATE USING (true);
 
 -- ============================================
 -- AI_MEMORY: bot writes
