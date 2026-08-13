@@ -382,9 +382,10 @@ const DISQUALIFIER_KEYWORDS = [
 /**
  * Random delay for human-like behavior
  */
-async function randomDelay(min: number = 500, max: number = 2000) {
+async function randomDelay(min: number = 10, max: number = 50) {
     const delay = Math.floor(Math.random() * (max - min + 1)) + min;
-    await new Promise(resolve => setTimeout(resolve, delay));
+    const capped = Math.min(delay, 50);
+    await new Promise(resolve => setTimeout(resolve, capped));
 }
 
 /**
