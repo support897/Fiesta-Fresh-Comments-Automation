@@ -985,7 +985,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     // Scroll to find post
                     for (let scroll = 0; scroll < 5; scroll++) {
                         await page.mouse.wheel(0, 1000);
-                        await randomDelay(1500, 3000);
+                        await new Promise(r => setTimeout(r, 500)); // allow FB content to settle
                         const posts = page.locator('[data-ad-preview="message"], [role="article"]');
                         let count = await posts.count();
                         if (count === 0) {
@@ -995,7 +995,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         let found = false;
 
                         for (let i = 0; i < count; i++) {
-                            const postText = (await posts.nth(i).innerText()).trim();
+                            const postText = (await posts.nth(i).innerText({ timeout: 2000 }).catch(() => '')).trim();
                             const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
                             const targetSnippet = norm(lead.post_text).slice(0, 35);
                             
@@ -1007,8 +1007,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             if (!(await commentBox.isVisible())) {
                                 const commentBtn = posts.nth(i).locator('[aria-label*="Comment" i], [aria-label*="Leave a comment" i], span:has-text("Comment")').first();
                                 if (await commentBtn.isVisible()) {
-                                    await commentBtn.click({ force: true });
-                                    await randomDelay(1000, 2000);
+                                    await commentBtn.click({ force: true, timeout: 3000 }).catch(() => {});
+                                    await new Promise(r => setTimeout(r, 300));
                                 }
                             }
                             
@@ -1018,9 +1018,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             } catch (e) {}
 
                             if (await activeBox.isVisible()) {
-                                await randomDelay(1000, 2000);
-                                await activeBox.click();
-                                await randomDelay(800, 1500);
+                                await activeBox.click({ timeout: 3000 }).catch(() => {});
                                 await page.keyboard.insertText(templateText);
                                 await randomDelay(500, 1000);
                                 await page.keyboard.press('Enter');
