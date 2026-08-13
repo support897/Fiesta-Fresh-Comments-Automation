@@ -1039,9 +1039,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                             // Look for textbox at page level with broad selectors
                             const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
-                            console.log(`\ud83d\udccd Step: waitFor activeBox`);
+                            console.log(`📍 Step: waitFor activeBox`);
                             try {
-                                await activeBox.waitFor({ state: 'visible', timeout: 3000 });
+                                await activeBox.waitFor({ state: 'visible', timeout: 10000 });
                             } catch (e) {}
                             const boxReady = await iv(activeBox);
                             console.log(`\ud83d\udccd Step: activeBox ready: ${boxReady}`);
@@ -1065,8 +1065,13 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                     replied_at: new Date()
                                 });
                                 
-                                const { error: leadErr } = await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                                console.log(`✅ Comment posted and logged for lead ${lead.post_id}! (replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'})`);
+                                const { data: updatedLeads, error: leadErr } = await supabase
+                                    .from('leads')
+                                    .update({ status: 'posted' })
+                                    .eq('post_id', lead.post_id)
+                                    .select();
+                                console.log(`✅ Comment posted for lead ${lead.post_id}! rows updated: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
+
                                 found = true;
 
                                 // ✅ Account 3 booster — fires 5s after every successful main-account comment
