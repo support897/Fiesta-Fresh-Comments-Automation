@@ -984,7 +984,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     
                     // Scroll to find post
                     for (let scroll = 0; scroll < 5; scroll++) {
-                        await page.mouse.wheel(0, 1000);
+                        await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
                         await new Promise(r => setTimeout(r, 500)); // allow FB content to settle
                         const posts = page.locator('[data-ad-preview="message"], [role="article"]');
                         let count = await posts.count();
