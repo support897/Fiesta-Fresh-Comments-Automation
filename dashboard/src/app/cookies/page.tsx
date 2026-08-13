@@ -179,9 +179,9 @@ export default function CookiesPage() {
   };
 
   const commandsMap: Record<string, string> = {
-    "ilse2taylor@gmail.com": "npx tsx bot/prime-session.ts 0",
-    "projects.reports.ilse@gmail.com": "npx tsx bot/prime-session.ts 1",
-    "account3": "npx tsx bot/save_account3_session.ts",
+    "ilse2taylor@gmail.com": "python3 bot/prime_session_mac.py",
+    "projects.reports.ilse@gmail.com": "python3 bot/prime_session_mac.py",
+    "account3": "python3 bot/prime_session_mac.py",
   };
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
