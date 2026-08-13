@@ -539,8 +539,8 @@ async function evaluatePostWithAI(postText: string): Promise<boolean> {
         }
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        // Using gemini-2.5-flash for speed and low cost
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        // Using gemini-3.6-flash for speed and low cost
+        const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
         const prompt = `You are a highly intelligent lead generation assistant for a residential cleaning company.
 Your job is to read Facebook posts and determine if the author is asking for a cleaner or cleaning services.
