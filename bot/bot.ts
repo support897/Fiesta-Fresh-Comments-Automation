@@ -401,29 +401,27 @@ async function humanType(page: any, selector: string, text: string) {
  * Close overlays and popups
  */
 async function closeOverlays(page: any) {
+    // Hard-limit: use page.$() for instant DOM checks, no auto-waiting
     const overlaySelectors = [
         'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
-        'button:has-text("Allow all cookies")',
-        'button:has-text("Allow essential and optional cookies")',
-        'div[aria-label="Allow all cookies"]',
         '[aria-label="Allow all cookies"]',
-        '[aria-label="Close"]',
         'button[aria-label="Close"]',
-        'div[role="dialog"] button:has-text("Close")',
-        'div[role="dialog"] button:has-text("Not Now")',
+        'div[role="dialog"] button',
     ];
-    
-    for (const selector of overlaySelectors) {
-        try {
-            const btn = page.locator(selector).first();
-            if (await btn.isVisible({ timeout: 300 })) {
-                console.log(`🍪 Closing overlay (${selector})`);
-                await btn.click({ timeout: 2000 }).catch(() => {});
+    await Promise.race([
+        (async () => {
+            for (const sel of overlaySelectors) {
+                try {
+                    const el = await page.$(sel);
+                    if (el) {
+                        console.log(`🍪 Closing overlay: ${sel}`);
+                        await el.click({ timeout: 1000 }).catch(() => {});
+                    }
+                } catch (e) {}
             }
-        } catch (e) {
-            // Overlay not found, continue
-        }
-    }
+        })(),
+        new Promise(r => setTimeout(r, 2500))
+    ]);
 }
 
 /**
@@ -1007,7 +1005,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
                                 console.log(`🎯 Found approved post! ("${targetSnippet}") Commenting...`);
                                 console.log(`📍 Step: closeOverlays`);
-                                await closeOverlays(page);
+                                await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
                                 console.log(`📍 Step: finding commentBox`);
 
                             // Helper: isVisible with hard 500ms timeout
