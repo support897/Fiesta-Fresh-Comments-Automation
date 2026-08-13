@@ -978,12 +978,18 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         continue;
                     }
                     
-                    await page.goto(lead.group_url, { waitUntil: 'commit', timeout: 45000 });
-                    await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 10000 }).catch(() => {});
-                    await randomDelay(2000, 4000);
+                    console.log(`📍 Navigating to group: ${lead.group_url?.slice(0, 80)}`);
+                    await Promise.race([
+                        page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 }),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('Hard goto timeout 30s')), 32000))
+                    ]);
+                    console.log(`📍 Page committed. Waiting for feed...`);
+                    await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 8000 }).catch(() => {});
+                    console.log(`📍 Feed ready. Starting scroll search...`);
                     
                     // Scroll to find post
                     for (let scroll = 0; scroll < 5; scroll++) {
+                        console.log(`📍 Scroll ${scroll + 1}/5...`);
                         await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
                         await new Promise(r => setTimeout(r, 500)); // allow FB content to settle
                         const posts = page.locator('[data-ad-preview="message"], [role="article"]');
