@@ -179,9 +179,9 @@ export default function CookiesPage() {
   };
 
   const commandsMap: Record<string, string> = {
-    "ilse2taylor@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py 1",
-    "projects.reports.ilse@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py 2",
-    "account3": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py 3",
+    "ilse2taylor@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
+    "projects.reports.ilse@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
+    "account3": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
   };
 
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
