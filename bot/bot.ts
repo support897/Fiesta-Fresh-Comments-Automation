@@ -1014,24 +1014,37 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 new Promise<boolean>(r => setTimeout(() => r(false), 500))
                             ]);
 
-                            let commentBox = posts.nth(i).locator('[aria-label*="comment" i], [aria-label*="Write" i], [role="textbox"]').first();
-                            if (!(await iv(commentBox))) {
-                                const commentBtn = posts.nth(i).locator('[aria-label*="Comment" i], [aria-label*="Leave a comment" i], span:has-text("Comment")').first();
-                                if (await iv(commentBtn)) {
-                                    await commentBtn.click({ force: true, timeout: 3000 }).catch(() => {});
-                                    await new Promise(r => setTimeout(r, 300));
-                                }
-                            }
-                            
-                            const activeBox = page.locator('[role="textbox"]:focus, [aria-label*="Write a comment" i], [role="textbox"]').first();
-                            console.log(`📍 Step: waitFor activeBox`);
-                            try {
-                                await activeBox.waitFor({ state: 'visible', timeout: 4000 });
-                            } catch (e) {}
-                            console.log(`📍 Step: check activeBox visible`);
+                            // Scroll post into view first
+                            await posts.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+                            await new Promise(r => setTimeout(r, 300));
 
-                            if (await iv(activeBox)) {
-                                console.log(`📍 Step: clicking activeBox`);
+                            // Try to find and click Comment button - log results
+                            const commentBox = posts.nth(i).locator('[role="textbox"], [contenteditable="true"], [aria-label*="Write" i]').first();
+                            const commentBoxVisible = await iv(commentBox);
+                            console.log(`📍 commentBox visible: ${commentBoxVisible}`);
+
+                            if (!commentBoxVisible) {
+                                // Try clicking "Comment" via JS evaluate on the post element
+                                const clicked = await posts.nth(i).evaluate((el: Element) => {
+                                    const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i], div[aria-label*="comment" i]') as HTMLElement | null;
+                                    if (btn) { btn.click(); return true; }
+                                    return false;
+                                }).catch(() => false);
+                                console.log(`📍 JS comment btn click: ${clicked}`);
+                                await new Promise(r => setTimeout(r, 500));
+                            }
+
+                            // Look for textbox at page level with broad selectors
+                            const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
+                            console.log(`\ud83d\udccd Step: waitFor activeBox`);
+                            try {
+                                await activeBox.waitFor({ state: 'visible', timeout: 3000 });
+                            } catch (e) {}
+                            const boxReady = await iv(activeBox);
+                            console.log(`\ud83d\udccd Step: activeBox ready: ${boxReady}`);
+
+                            if (boxReady) {
+                                console.log(`\ud83d\udccd Step: clicking activeBox`);
 
                                 await activeBox.click({ timeout: 3000 }).catch(() => {});
                                 console.log(`📍 Step: inserting text`);
