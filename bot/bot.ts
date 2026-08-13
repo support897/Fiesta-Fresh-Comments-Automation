@@ -327,13 +327,17 @@ async function extractFacebookPostIdFromMessage(message: any): Promise<string | 
         return await message.evaluate((el: HTMLElement) => {
             let cur: HTMLElement | null = el;
             for (let i = 0; cur && i < 10; i++) {
-                const permalink = cur.querySelector('a[href*="/posts/"], a[href*="story_fbid="], a[aria-label*="Time"], a[aria-label*="Date"]');
+                const permalink = cur.querySelector('a[href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[aria-label*="Time"], a[aria-label*="Date"]');
                 if (permalink) {
                     const href = permalink.getAttribute('href') || '';
                     const m1 = href.match(/story_fbid=(\d+)/);
                     if (m1 && m1[1]) return m1[1];
                     const m2 = href.match(/\/posts\/(\d+)/);
                     if (m2 && m2[1]) return m2[1];
+                    const m3 = href.match(/\/permalink\/(\d+)/);
+                    if (m3 && m3[1]) return m3[1];
+                    const m4 = href.match(/multi_permalinks=(\d+)/);
+                    if (m4 && m4[1]) return m4[1];
                 }
                 const ft = cur.querySelector('[data-ft]');
                 if (ft) {
@@ -1153,6 +1157,13 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                     console.log(`📍 activeBox ready: ${boxReady}`);
 
                                     if (boxReady) {
+                                        // ── FINAL DOM DEDUPLICATION CHECK ──
+                                        const pageText = await page.innerText('body').catch(() => '');
+                                        if (pageText.includes('Fiesta Fresh Cleaning') || pageText.includes('200% Happiness Guarantee')) {
+                                            console.log(`⚠️ DETECTED OWN COMMENT ON PAGE! Aborting duplicate.`);
+                                            found = true; break;
+                                        }
+
                                         await activeBox.click({ timeout: 3000 }).catch(() => {});
                                         await page.keyboard.insertText(templateText);
                                         await page.keyboard.press('Enter');
@@ -1320,7 +1331,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                         // Fallback to text hash if no real ID is found
                         if (!postID) {
-                            const textHash = postText.substring(0, 100).replace(/\s/g, '_');
+                            const cleanText = postText.replace(/[\W_]+/g, '').toLowerCase(); // Strip everything but alphanumeric
+                            const textHash = cleanText.substring(0, 40); // Grab first 40 clean chars
                             postID = `hash_${textHash}`;
                         }
                         
