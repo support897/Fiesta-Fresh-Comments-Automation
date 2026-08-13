@@ -1010,10 +1010,16 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 await closeOverlays(page);
                                 console.log(`📍 Step: finding commentBox`);
 
+                            // Helper: isVisible with hard 500ms timeout
+                            const iv = (loc: any) => Promise.race([
+                                loc.isVisible(),
+                                new Promise<boolean>(r => setTimeout(() => r(false), 500))
+                            ]);
+
                             let commentBox = posts.nth(i).locator('[aria-label*="comment" i], [aria-label*="Write" i], [role="textbox"]').first();
-                            if (!(await commentBox.isVisible())) {
+                            if (!(await iv(commentBox))) {
                                 const commentBtn = posts.nth(i).locator('[aria-label*="Comment" i], [aria-label*="Leave a comment" i], span:has-text("Comment")').first();
-                                if (await commentBtn.isVisible()) {
+                                if (await iv(commentBtn)) {
                                     await commentBtn.click({ force: true, timeout: 3000 }).catch(() => {});
                                     await new Promise(r => setTimeout(r, 300));
                                 }
@@ -1026,8 +1032,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             } catch (e) {}
                             console.log(`📍 Step: check activeBox visible`);
 
-                            if (await activeBox.isVisible()) {
+                            if (await iv(activeBox)) {
                                 console.log(`📍 Step: clicking activeBox`);
+
                                 await activeBox.click({ timeout: 3000 }).catch(() => {});
                                 console.log(`📍 Step: inserting text`);
                                 await page.keyboard.insertText(templateText);
