@@ -985,13 +985,34 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             page.goto(postUrl, { waitUntil: 'commit', timeout: 30000 }),
                             new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
                         ]);
-                        console.log(`📍 Post page committed. Closing overlays...`);
-                        await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
-
                         const iv = (loc: any) => Promise.race([
                             loc.isVisible(),
                             new Promise<boolean>(r => setTimeout(() => r(false), 500))
                         ]);
+                        await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
+                        await new Promise(r => setTimeout(r, 3000)); // let page render comment section
+
+                        // Diagnostics: confirm we landed on the right page
+                        const landedUrl = page.url();
+                        const pageTitle = await page.title().catch(() => 'unknown');
+                        console.log(`📍 Landed URL: ${landedUrl.slice(0, 90)}`);
+                        console.log(`📍 Page title: ${pageTitle.slice(0, 60)}`);
+
+                        // Count contenteditable/textbox elements for debugging
+                        const ceCount = await page.locator('[contenteditable]').count().catch(() => 0);
+                        const tbCount = await page.locator('[role="textbox"]').count().catch(() => 0);
+                        console.log(`📍 contenteditable: ${ceCount}, textbox: ${tbCount}`);
+
+                        // Try clicking the comment placeholder to activate the editor
+                        const commentPlaceholder = page.locator(
+                            '[aria-label*="Write a comment" i], ' +
+                            '[aria-label*="Leave a comment" i], ' +
+                            '[aria-placeholder*="comment" i], ' +
+                            '[data-lexical-editor], ' +
+                            '[contenteditable]'
+                        ).first();
+                        await commentPlaceholder.click({ timeout: 3000 }).catch(() => {});
+                        await new Promise(r => setTimeout(r, 1000));
 
                         // On direct post page the comment box is present in DOM
                         const commentInput = page.locator(
