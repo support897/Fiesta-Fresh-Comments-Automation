@@ -528,43 +528,50 @@ async function captureProof(page: any, fileName: string) {
 }
 
 /**
- * Semantic Search Fallback (Local AI)
- */
-let extractor: any = null;
-
-async function getExtractor() {
-    if (!extractor) {
-        console.log("📥 Loading local semantic AI model (first time downloads it)...");
-        extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-    }
-    return extractor;
-}
-
-async function evaluateWithSemanticSearch(postText: string): Promise<boolean> {
-    try {
-        console.log("🧠 Running local Semantic Search Fallback...");
-        const extract = await getExtractor();
-        
-        const idealLead = "I am looking to hire a professional cleaner or asking for cleaner recommendations for house, home, bond, end of lease, commercial, office, or carpet cleaning.";
-        
-        const postOutput = await extract(postText, { pooling: 'mean', normalize: true });
-        const idealOutput = await extract(idealLead, { pooling: 'mean', normalize: true });
-        
-        const similarity = cos_sim(Array.from(postOutput.data), Array.from(idealOutput.data));
-        console.log(`📊 Semantic Similarity Score: ${(similarity * 100).toFixed(2)}%`);
-        
-        return similarity > 0.45;
-    } catch (e) {
-        console.error("❌ Semantic search failed:", e);
-        return postText.toLowerCase().includes('clean');
-    }
-}
-
-/**
- * 100% Zero-API Lead Evaluator (Local Semantic Transformer Neural Network)
+ * 100% Accurate AI Evaluator using Google Gemini
  */
 async function evaluatePostWithAI(postText: string): Promise<boolean> {
-    return await evaluateWithSemanticSearch(postText);
+    try {
+        console.log("🧠 Evaluating post via Google Gemini AI...");
+        if (!process.env.GEMINI_API_KEY) {
+            console.warn("⚠️ GEMINI_API_KEY missing! Falling back to basic keyword check.");
+            return postText.toLowerCase().includes('clean');
+        }
+
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        // Using gemini-2.5-flash for speed and low cost
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+        const prompt = `You are a highly intelligent lead generation assistant for a residential cleaning company.
+Your job is to read Facebook posts and determine if the author is asking for a cleaner or cleaning services.
+
+Reply with EXACTLY ONE WORD: "YES" if they are asking for a cleaner/cleaning service, or "NO" if they are not.
+
+Examples of YES:
+- "Can anyone recommend a good bond cleaner?"
+- "Need someone to clean my 4 bedroom house this weekend."
+- "Looking for a reliable cleaner in Southport."
+- "Anyone free to do an end of lease clean?"
+
+Examples of NO (False Positives):
+- "Cleaning out my closet, selling clothes!"
+- "I run a cleaning business and have capacity."
+- "My dog is so clean after his bath!"
+- "Does anyone know how to clean a suede couch?"
+- "Hi I am a cleaner looking for work."
+
+Post text to evaluate:
+"${postText}"`;
+
+        const result = await model.generateContent(prompt);
+        const response = result.response.text().trim().toUpperCase();
+        
+        console.log(`🧠 Gemini Evaluation Result: ${response}`);
+        return response.includes("YES");
+    } catch (e) {
+        console.error("❌ Gemini API failed:", e);
+        return postText.toLowerCase().includes('clean');
+    }
 }
 
 async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
