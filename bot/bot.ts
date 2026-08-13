@@ -1226,6 +1226,18 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         continue;
                     }
 
+                    // Check if lead was already processed (either approved, pending, posted, or rejected)
+                    const { data: existingLead } = await supabase
+                        .from('leads')
+                        .select('status')
+                        .eq('post_id', postID)
+                        .maybeSingle();
+
+                    if (existingLead) {
+                        console.log(`    ⏭️ Already evaluated post ${postID} (status: ${existingLead.status}). Skipping.`);
+                        continue;
+                    }
+
                     // **Keyword quick filter first**
                     const quickDecision = quickKeywordFilter(postText);
                     
@@ -1241,12 +1253,6 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     
                     if (isLead) {
                         console.log(`🎯 MATCH FOUND: ${postID}`);
-
-                        const { data: existing } = await supabase.from('leads').select('*').eq('post_id', postID).single();
-                        if (existing) {
-                            console.log("⏭️ Lead already in database. Skipping.");
-                            continue;
-                        }
 
                         // Always use exact fixed reply template - zero variations
                         const templateText = FIXED_REPLY_TEMPLATE;
@@ -1341,6 +1347,16 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
                         await randomDelay(4000, 6000);
                         await postWebsiteUrlBoosterReply(group.url, postID);
+                    } else {
+                        // Record rejected post in database to avoid future AI calls
+                        try {
+                            await supabase.from('leads').insert({
+                                post_id: postID,
+                                group_url: group.url,
+                                post_text: postText,
+                                status: 'rejected'
+                            });
+                        } catch (err) {}
                     }
                     
                     await randomDelay(500, 1500);
