@@ -366,7 +366,9 @@ const INTENT_LEAD_KEYWORDS = [
     "end of lease clean", "bond clean", "bond cleaning", "house cleaning", "deep clean",
     "carpet cleaning", "window cleaning", "air bnb cleaning", "airbnb cleaning", "office cleaning",
     "commercial cleaning", "builder clean", "builders clean", "regular clean", "weekly clean",
-    "fortnightly clean", "cleaner for home", "cleaner for house", "cleaner for flat", "cleaner for apartment"
+    "fortnightly clean", "cleaner for home", "cleaner for house", "cleaner for flat", "cleaner for apartment",
+    "seeking cleaner", "seeking a cleaner", "cleaner recommendation", "good cleaner",
+    "reliable cleaner", "cleaning service needed", "looking for cleaning service"
 ];
 
 const DISQUALIFIER_KEYWORDS = [
@@ -627,13 +629,21 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         });
 
         const isNumericId = /^\d+$/.test(String(postId));
-        const targetUrl = isNumericId
-            ? `${groupUrl.replace(/\/$/, '')}/posts/${postId}`
-            : groupUrl;
+        let targetUrl = groupUrl;
+        if (isNumericId) {
+            if (groupUrl.includes('/share/g/')) {
+                await boosterPage.goto(groupUrl, { waitUntil: 'commit', timeout: 30000 });
+                await new Promise(r => setTimeout(r, 1500));
+                const resolvedUrl = new URL(boosterPage.url());
+                targetUrl = `${resolvedUrl.origin}${resolvedUrl.pathname.replace(/\/$/, '')}/posts/${postId}`;
+            } else {
+                targetUrl = `${groupUrl.split('?')[0].replace(/\/$/, '')}/posts/${postId}`;
+            }
+        }
 
         console.log(`🌐 Booster landing on URL: ${targetUrl.slice(0, 90)}`);
         await boosterPage.goto(targetUrl, { waitUntil: 'commit', timeout: 45000 });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 500));
 
         const boosterCommentText = "https://www.fiestafreshcleaning.com/";
 
@@ -1006,7 +1016,16 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                     if (isNumericId) {
                         // ── FAST PATH: navigate directly to the post permalink ──
-                        const postUrl = `${lead.group_url.replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        let postUrl = '';
+                        if (lead.group_url.includes('/share/g/')) {
+                            console.log(`📍 Resolving share URL to group URL first...`);
+                            await page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 });
+                            await new Promise(r => setTimeout(r, 1500));
+                            const resolvedUrl = new URL(page.url());
+                            postUrl = `${resolvedUrl.origin}${resolvedUrl.pathname.replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        } else {
+                            postUrl = `${lead.group_url.split('?')[0].replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        }
                         console.log(`📍 Direct post URL: ${postUrl.slice(0, 90)}`);
                         await Promise.race([
                             page.goto(postUrl, { waitUntil: 'commit', timeout: 30000 }),
@@ -1073,7 +1092,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
 
                             console.log(`⏳ Pausing before Account 3 booster...`);
-                            await randomDelay(4000, 6000);
+                            await randomDelay(100, 200);
                             await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
                         } else {
                             console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}. Marking status to prevent infinite loop.`);
@@ -1152,7 +1171,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                         console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
                                         found = true;
 
-                                        await randomDelay(4000, 6000);
+                                        await randomDelay(100, 200);
                                         await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
                                         break;
                                     }
@@ -1223,6 +1242,15 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 }
                 await randomDelay(500, 1000);
 
+                // Enforce Chronological Sorting for Facebook Groups to find New Posts
+                const currentUrl = page.url();
+                if (!currentUrl.includes('sorting_setting=CHRONOLOGICAL') && currentUrl.includes('/groups/')) {
+                    console.log("🔄 Applying Chronological sorting to uncover new posts...");
+                    const separator = currentUrl.includes('?') ? '&' : '?';
+                    await page.goto(`${currentUrl}${separator}sorting_setting=CHRONOLOGICAL`, { waitUntil: 'commit', timeout: 30000 }).catch(() => {});
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+
                 // Detect session loss vs inaccessible group
                 if (page.url().includes('/login/')) {
                     consecutiveLoginRedirects++;
@@ -1269,199 +1297,178 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 const postCount = await posts.count();
                 console.log(`📡 Found ${postCount} posts.`);
 
-                let previousPostCount = 0;
                 let currentScrolls = 0;
-                const MAX_SCROLLS = 3; // Scroll deep enough to capture all posts within last 2 days (48h)
+                const MAX_SCROLLS = 8; // Scroll deep enough to capture all posts within last 2 days (48h)
+                const seenPostIds = new Set<string>();
+                let consecutiveNoNewPosts = 0;
 
                 while (currentScrolls < MAX_SCROLLS) {
-                    await page.mouse.wheel(0, 5000); // Scroll down to load historical posts
-                    await randomDelay(800, 1500); // Wait for post items to render
-
-                    const tempPostCount = await posts.count();
-                    if (tempPostCount === previousPostCount) {
-                        console.log("    No new posts loaded after scroll, stopping deeper scan.");
-                        break;
-                    }
-                    previousPostCount = tempPostCount;
-                    currentScrolls++;
-                    console.log(`    Scrolled ${currentScrolls}/${MAX_SCROLLS} times. Now visible: ${previousPostCount} posts.`);
-                }
-                
-                // Process all posts visible within the last 2 days (48 hours)
-                const finalPostCount = await posts.count();
-                console.log(`    Processing up to ${finalPostCount} posts within last 2 days in this group.`);
-                for (let i = 0; i < finalPostCount; i++) {
-                    const post = posts.nth(i);
-                    let postText: string;
-                    try {
-                        postText = (await post.innerText({ timeout: 10000 })).trim();
-                    } catch (e) {
-                        console.warn(`    ⚠️ Could not read post text (${e instanceof Error ? e.message.split('\n')[0] : e}) - skipping.`);
-                        continue;
-                    }
-
-                    // 48-hour age filter: accept posts from TODAY, YESTERDAY, 1h–23h, 1d, 2d.
-                    // Reject posts timestamped 3d, 4d, … or 1w+ (older than 48 hours).
-                    const lowerText = postText.toLowerCase();
-                    const isTooOld = (
-                        /\b[3-9]d\b/.test(lowerText) ||       // 3d–9d
-                        /\b[1-9]\d+d\b/.test(lowerText) ||    // 10d+
-                        /\b\d+\s*w\b/.test(lowerText) ||      // 1w, 2w…
-                        /\b\d+\s*mo\b/.test(lowerText) ||     // 1mo+
-                        /\b\d+\s*y\b/.test(lowerText)         // 1y+
-                    );
-                    if (isTooOld) {
-                        console.log(`    ⏩ Skipping post older than 2 days (48h).`);
-                        continue;
-                    }
-                    // Explicitly allow: 'just now', 'now', Xm, Xh, 1d, 2d, 'yesterday', 'today'
-                    // (No action needed — these pass through the filter above naturally)
-
-                    // Attempt to extract real Facebook Post ID
-                    let postID = await extractFacebookPostIdFromMessage(post);
-
-                    // Fallback to text hash if no real ID is found
-                    if (!postID) {
-                        const textHash = postText.substring(0, 100).replace(/\s/g, '_');
-                        postID = `hash_${textHash}`;
-                        console.warn(`    ⚠️ Using text hash for Post ID (could not find real FBID): ${postID}`);
-                    }
-
-                    // **Check dedup in replies_log**
-                    const { data: alreadyReplied } = await supabase
-                        .from('replies_log')
-                        .select('*')
-                        .eq('post_id', postID)
-                        .eq('group_url', group.url)
-                        .single();
+                    const postCount = await posts.count();
+                    let newPostsFoundInThisScroll = 0;
                     
-                    if (alreadyReplied) {
-                        console.log("⏭️ Already replied to this post. Skipping.");
-                        continue;
-                    }
+                    for (let i = 0; i < postCount; i++) {
+                        const post = posts.nth(i);
+                        let postText: string;
+                        try {
+                            postText = (await post.innerText({ timeout: 2000 })).trim();
+                        } catch (e) {
+                            continue; // Probably detached or not fully loaded
+                        }
+                        
+                        // Attempt to extract real Facebook Post ID
+                        let postID = await extractFacebookPostIdFromMessage(post);
 
-                    // Check if lead was already processed (either approved, pending, posted, or rejected)
-                    const { data: existingLead } = await supabase
-                        .from('leads')
-                        .select('status')
-                        .eq('post_id', postID)
-                        .maybeSingle();
+                        // Fallback to text hash if no real ID is found
+                        if (!postID) {
+                            const textHash = postText.substring(0, 100).replace(/\s/g, '_');
+                            postID = `hash_${textHash}`;
+                        }
+                        
+                        // Deduplicate in-memory to avoid reprocessing in next scroll
+                        if (seenPostIds.has(postID)) {
+                            continue;
+                        }
+                        seenPostIds.add(postID);
+                        newPostsFoundInThisScroll++;
 
-                    if (existingLead) {
-                        console.log(`    ⏭️ Already evaluated post ${postID} (status: ${existingLead.status}). Skipping.`);
-                        continue;
-                    }
-
-                    // **Keyword quick filter first**
-                    const quickDecision = quickKeywordFilter(postText);
-                    
-                    let isLead = false;
-                    if (quickDecision === 'approve') {
-                        isLead = true;
-                    } else if (quickDecision === 'reject') {
-                        isLead = false;
-                    } else {
-                        // Unsure - use AI
-                        isLead = await evaluatePostWithAI(postText);
-                    }
-                    
-                    if (isLead) {
-                        console.log(`🎯 MATCH FOUND: ${postID}`);
-
-                        // Always use exact fixed reply template - zero variations
-                        const templateText = FIXED_REPLY_TEMPLATE;
-
-                        if (DRY_RUN) {
-                            console.log(`[DRY RUN] Would comment on lead (${postID}): ${postText.substring(0, 60)}...`);
-                            console.log(`[DRY RUN] Comment: ${templateText.substring(0, 80)}...`);
-                            await supabase.from('leads').insert({
-                                post_id: postID,
-                                group_url: group.url,
-                                post_text: postText,
-                                status: 'posted'
-                            });
-                            await supabase.from('replies_log').insert({
-                                post_id: postID,
-                                group_url: group.url,
-                                comment_id: `dryrun_${Date.now()}`,
-                                replied_at: new Date()
-                            });
+                        // 48-hour age filter
+                        const lowerText = postText.toLowerCase();
+                        const isTooOld = (
+                            /\b[3-9]d\b/.test(lowerText) ||       // 3d–9d
+                            /\b[1-9]\d+d\b/.test(lowerText) ||    // 10d+
+                            /\b\d+\s*w\b/.test(lowerText) ||      // 1w, 2w…
+                            /\b\d+\s*mo\b/.test(lowerText) ||     // 1mo+
+                            /\b\d+\s*y\b/.test(lowerText)         // 1y+
+                        );
+                        if (isTooOld) {
+                            console.log(`    ⏩ Skipping post ${postID} - older than 2 days.`);
                             continue;
                         }
 
-                        console.log("⚡ Auto-accepted lead! Attempting immediate comment...");
-                        await closeOverlays(page);
-                        let commented = false;
-                        try {
-                            const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
-                            if (await commentBox.isVisible({ timeout: 1000 })) {
-                                await commentBox.click({ force: true }).catch(() => {});
-                                await page.keyboard.insertText(templateText);
-                                await page.keyboard.press('Enter');
-                                commented = true;
-                                console.log(`✅ Direct comment posted on post ${postID}!`);
-                            } else {
-                                const commentBtn = post.locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
-                                if (await commentBtn.isVisible({ timeout: 1000 })) {
-                                    await commentBtn.click({ force: true }).catch(() => {});
-                                    const activeBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
-                                    if (await activeBox.isVisible({ timeout: 1000 })) {
-                                        await activeBox.click({ force: true }).catch(() => {});
-                                        await page.keyboard.insertText(templateText);
-                                        await page.keyboard.press('Enter');
-                                        commented = true;
-                                        console.log(`✅ Direct comment posted on post ${postID}!`);
+                        // **Check dedup in replies_log**
+                        const { data: alreadyReplied } = await supabase
+                            .from('replies_log')
+                            .select('*')
+                            .eq('post_id', postID)
+                            .eq('group_url', group.url)
+                            .single();
+                        
+                        if (alreadyReplied) {
+                            console.log("⏭️ Already replied to this post. Skipping.");
+                            continue;
+                        }
+
+                        // Check if lead was already processed
+                        const { data: existingLead } = await supabase
+                            .from('leads')
+                            .select('status')
+                            .eq('post_id', postID)
+                            .maybeSingle();
+
+                        if (existingLead) {
+                            console.log(`    ⏭️ Already evaluated post ${postID} (status: ${existingLead.status}). Skipping.`);
+                            continue;
+                        }
+
+                        // **Keyword quick filter first**
+                        const quickDecision = quickKeywordFilter(postText);
+                        
+                        let isLead = false;
+                        if (quickDecision === 'approve') {
+                            isLead = true;
+                        } else if (quickDecision === 'reject') {
+                            isLead = false;
+                        } else {
+                            isLead = await evaluatePostWithAI(postText);
+                        }
+                        
+                        if (isLead) {
+                            console.log(`🎯 MATCH FOUND: ${postID}`);
+
+                            const templateText = FIXED_REPLY_TEMPLATE;
+
+                            if (DRY_RUN) {
+                                // Dry run logging
+                                console.log(`[DRY RUN] Would comment on lead (${postID}): ${postText.substring(0, 60)}...`);
+                                console.log(`[DRY RUN] Comment: ${templateText.substring(0, 80)}...`);
+                                await supabase.from('leads').insert({ post_id: postID, group_url: group.url, post_text: postText, status: 'posted' });
+                                await supabase.from('replies_log').insert({ post_id: postID, group_url: group.url, comment_id: `dryrun_${Date.now()}`, replied_at: new Date() });
+                                continue;
+                            }
+
+                            console.log("⚡ Auto-accepted lead! Attempting immediate comment...");
+                            await closeOverlays(page);
+                            let commented = false;
+                            try {
+                                const commentBox = post.locator('[aria-label="Write a comment"], [role="textbox"]').first();
+                                if (await commentBox.isVisible({ timeout: 1000 })) {
+                                    await commentBox.click({ force: true }).catch(() => {});
+                                    await page.keyboard.insertText(templateText);
+                                    await page.keyboard.press('Enter');
+                                    commented = true;
+                                    console.log(`✅ Direct comment posted on post ${postID}!`);
+                                } else {
+                                    const commentBtn = post.locator('[aria-label="Leave a comment"], [aria-label="Comment"]').first();
+                                    if (await commentBtn.isVisible({ timeout: 1000 })) {
+                                        await commentBtn.click({ force: true }).catch(() => {});
+                                        const activeBox = page.locator('[role="textbox"]:focus, [aria-label="Write a comment"]').first();
+                                        if (await activeBox.isVisible({ timeout: 1000 })) {
+                                            await activeBox.click({ force: true }).catch(() => {});
+                                            await page.keyboard.insertText(templateText);
+                                            await page.keyboard.press('Enter');
+                                            commented = true;
+                                            console.log(`✅ Direct comment posted on post ${postID}!`);
+                                        }
                                     }
                                 }
+                            } catch (commentErr: any) {
+                                console.error(`⚠️ Could not post comment directly: ${commentErr.message?.slice(0, 80)}`);
                             }
-                        } catch (commentErr: any) {
-                            console.error(`⚠️ Could not post comment directly: ${commentErr.message?.slice(0, 80)}`);
-                        }
 
-                        // Write to replies_log only if main account actually commented
-                        if (commented) {
-                            await supabase.from('replies_log').insert({
-                                post_id: postID,
-                                group_url: group.url,
-                                comment_id: `comment_${Date.now()}`,
-                                replied_at: new Date()
-                            });
-                        }
-
-                        const { error: insertError } = await supabase.from('leads').insert({
-                            post_id: postID,
-                            group_url: group.url,
-                            post_text: postText,
-                            status: commented ? 'posted' : 'approved'
-                        });
-
-                        if (insertError) {
-                            if (insertError.message?.includes('duplicate')) {
-                                console.log("⏭️ Lead already logged.");
-                            } else {
-                                console.error("❌ Failed to log lead:", insertError.message);
+                            if (commented) {
+                                await supabase.from('replies_log').insert({
+                                    post_id: postID,
+                                    group_url: group.url,
+                                    comment_id: `comment_${Date.now()}`,
+                                    replied_at: new Date()
+                                });
                             }
-                        } else {
-                            console.log(`✅ Lead logged as ${commented ? 'posted' : 'approved'}.`);
-                        }
-                        // Account 3 booster fires regardless — even if main account failed,
-                        // the URL drop still goes on 100% of leads found
-                        console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
-                        await randomDelay(4000, 6000);
-                        await postWebsiteUrlBoosterReply(group.url, postID);
-                    } else {
-                        // Record rejected post in database to avoid future AI calls
-                        try {
-                            await supabase.from('leads').insert({
+
+                            const { error: insertError } = await supabase.from('leads').insert({
                                 post_id: postID,
                                 group_url: group.url,
                                 post_text: postText,
-                                status: 'rejected'
+                                status: commented ? 'posted' : 'approved'
                             });
-                        } catch (err) {}
-                    }
+
+                            if (insertError && !insertError.message?.includes('duplicate')) {
+                                console.error("❌ Failed to log lead:", insertError.message);
+                            }
+
+                            console.log("⏳ Pausing 5s before Account 3 Website URL Booster comment...");
+                            await randomDelay(4000, 6000);
+                            await postWebsiteUrlBoosterReply(group.url, postID);
+                        } else {
+                            try {
+                                await supabase.from('leads').insert({ post_id: postID, group_url: group.url, post_text: postText, status: 'rejected' });
+                            } catch (err) {}
+                        }
+                    } // end post loop
                     
-                    await randomDelay(500, 1500);
+                    if (newPostsFoundInThisScroll === 0) {
+                        consecutiveNoNewPosts++;
+                        if (consecutiveNoNewPosts >= 2) {
+                            console.log("    No new posts loaded after multiple scrolls, stopping deeper scan.");
+                            break;
+                        }
+                    } else {
+                        consecutiveNoNewPosts = 0;
+                    }
+
+                    console.log(`    Scrolled ${currentScrolls + 1}/${MAX_SCROLLS} times. Processed ${seenPostIds.size} unique posts so far.`);
+                    await page.mouse.wheel(0, 5000); // Scroll down to load more historical posts
+                    await randomDelay(800, 1500); // Wait for post items to render
+                    currentScrolls++;
                 }
             }
         }

@@ -18,14 +18,17 @@ def main():
     print("=" * 60)
     print("  🌐 FIESTA FRESH - FACEBOOK SESSION PRIMER & COOKIE SAVER")
     print("=" * 60)
-    print("Select account to log in:")
-    for idx, acc in enumerate(ACCOUNTS):
-        print(f"  [{idx + 1}] {acc['label']}")
     
-    choice = input("\nEnter number (1-3) [default 2]: ").strip()
     idx = 1
-    if choice in ["1", "2", "3"]:
-        idx = int(choice) - 1
+    if len(sys.argv) > 1 and sys.argv[1] in ["1", "2", "3"]:
+        idx = int(sys.argv[1]) - 1
+    else:
+        print("Select account to log in:")
+        for i, acc in enumerate(ACCOUNTS):
+            print(f"  [{i + 1}] {acc['label']}")
+        choice = input("\nEnter number (1-3) [default 2]: ").strip()
+        if choice in ["1", "2", "3"]:
+            idx = int(choice) - 1
 
     target_email = ACCOUNTS[idx]["email"]
     print(f"\n🚀 Opening browser for: {target_email}...")
