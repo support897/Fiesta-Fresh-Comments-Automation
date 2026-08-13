@@ -622,6 +622,13 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         await boosterContext.addCookies(normalisedCookies);
 
         const boosterPage = await boosterContext.newPage();
+        await boosterContext.route('**/*', (route: any) => {
+            const type = route.request().resourceType();
+            if (['image', 'font', 'media'].includes(type)) {
+                return route.abort();
+            }
+            return route.continue();
+        });
         await boosterPage.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
         await randomDelay(3000, 5000);
 
@@ -729,12 +736,10 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
 
-    // Block heavy downloads — we only scrape text. Cuts memory massively, which is
-    // critical on Render's 512Mi instance (was OOM-killing us). In headed mode we
-    // only block media/video so the browser looks like a normal one loading images.
+    // Block heavy downloads — we only scrape text. Cuts memory and network bandwidth massively.
     await context.route('**/*', (route: any) => {
         const type = route.request().resourceType();
-        if (type === 'media' || (headless && (type === 'image' || type === 'font'))) {
+        if (['image', 'font', 'media'].includes(type)) {
             return route.abort();
         }
         return route.continue();
@@ -781,10 +786,10 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
     try {
         console.log("➡️ Navigating to Facebook...");
-        await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(async () => {
+        await page.goto('https://www.facebook.com', { waitUntil: 'commit', timeout: 45000 }).catch(async () => {
             console.log("⚠️ Home goto slow — retrying once...");
             await randomDelay(3000, 5000);
-            await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.goto('https://www.facebook.com', { waitUntil: 'commit', timeout: 45000 });
         });
         await randomDelay(3000, 5000);
 
@@ -832,7 +837,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
             try {
                 // Clear existing session context cookies to get a clean slate
                 await context.clearCookies();
-                await page.goto('https://www.facebook.com/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
+                await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 45000 });
                 await randomDelay(2000, 4000);
                 await closeOverlays(page);
 
@@ -972,7 +977,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                         continue;
                     }
                     
-                    await page.goto(lead.group_url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                    await page.goto(lead.group_url, { waitUntil: 'commit', timeout: 45000 });
                     await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 10000 }).catch(() => {});
                     await randomDelay(2000, 4000);
                     
@@ -1096,11 +1101,11 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 console.log(`\n📡 Scanning: ${group.url}`);
                 try {
                     try {
-                        await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                        await page.goto(group.url, { waitUntil: 'commit', timeout: 45000 });
                     } catch (gotoErr) {
                         console.warn(`⚠️ goto timed out for ${group.url}, retrying once...`);
                         await randomDelay(4000, 6000);
-                        await page.goto(group.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                        await page.goto(group.url, { waitUntil: 'commit', timeout: 45000 });
                     }
                 } catch (e) {
                     console.warn(`⚠️ Skipping group ${group.url}: ${(e as any).message?.slice(0, 100)}`);
