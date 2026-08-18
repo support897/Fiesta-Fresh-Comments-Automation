@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -14,7 +15,46 @@ import {
   Cookie,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabaseClient";
 import "./globals.css";
+
+const HEARTBEAT_KEY = "__heartbeat__";
+const HEARTBEAT_STALE_SECONDS = 300;
+
+/** Live VPS status from the bot's Supabase heartbeat (was a hardcoded "24/7" badge). */
+function VpsBadge() {
+  const [online, setOnline] = React.useState(false);
+  const [lastSeen, setLastSeen] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const { data } = await supabase
+        .from("sessions")
+        .select("cookies, updated_at")
+        .eq("user_email", HEARTBEAT_KEY)
+        .maybeSingle();
+      if (cancelled) return;
+      const beat = Array.isArray(data?.cookies) ? (data!.cookies as any[])[0] : null;
+      const ts: string | null = beat?.ts ?? data?.updated_at ?? null;
+      setLastSeen(ts);
+      setOnline(!!ts && (Date.now() - new Date(ts).getTime()) / 1000 < HEARTBEAT_STALE_SECONDS);
+    };
+    check();
+    const iv = setInterval(check, 60000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+
+  return (
+    <span
+      title={lastSeen ? `Last heartbeat: ${new Date(lastSeen).toLocaleString("en-AU")}` : "No heartbeat recorded"}
+      className={cn("flex items-center gap-1 font-bold lowercase", online ? "text-emerald-600" : "text-red-600")}
+    >
+      <span className={cn("w-1.5 h-1.5 rounded-full", online ? "bg-emerald-500 animate-pulse" : "bg-red-500")} />
+      {online ? "vps live" : "vps offline"}
+    </span>
+  );
+}
 
 const LOGO = "https://www.fiestafreshcleaning.com/assets/logo-CpH5fHWq.jpeg";
 
@@ -108,11 +148,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* Footer */}
           <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
             <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
-              <span>Version 1.1.0</span>
-              <span className="flex items-center gap-1 text-emerald-600 font-bold lowercase">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                vps 24/7
-              </span>
+              <span>Version 1.2.0</span>
+              <VpsBadge />
             </div>
           </div>
         </aside>
