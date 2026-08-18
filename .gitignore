@@ -10,3 +10,9 @@ test_sqlite_write.ts
 test_db.ts
 deploy-vercel.sh
 deploy-render.sh
+
+# secrets & runtime state
+bot/.env
+bot/FiestaSession/
+bot/last_report_date.txt
+bot/group_cursor.txt

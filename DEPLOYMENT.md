@@ -1,197 +1,58 @@
-# 🚀 DEPLOYMENT GUIDE - Fiesta Fresh Bot v2.0
+# Deployment — Fiesta Fresh Comments Bot
 
-## ✅ What's Been Fixed
+The bot runs **only** on the Oracle VPS (`159.13.36.205`) as a systemd service.
+The dashboard runs **only** on Vercel (`fiesta-comments-dashboard.vercel.app`),
+auto-deployed from `main`. They share state through Supabase — there is no direct
+API between them.
 
-### Bot Improvements:
-- ✅ **No more double commenting** - tracks replies in `replies_log` table
-- ✅ **24/7 continuous loop** - runs every 60 seconds (configurable)
-- ✅ **Human-like behavior** - random typing speed, pauses, overlay handling
-- ✅ **Keyword quick-filter** - instant approve/reject before AI (saves $$)
-- ✅ **Dry-run mode** - test without actually posting
-- ✅ **Name personalization** - extracts commenter's first name
-- ✅ **Proper deduplication** - composite unique key on post_id + group_url
-- ✅ **Fixed Chromium installation** - correct browser version for VPS
+> Render.com is no longer used. The old `render.yaml`, `bot/Dockerfile` and
+> `render-build.sh` have been removed.
 
-### Dashboard Improvements:
-- ✅ **Safe database queries** - uses `.maybeSingle()` instead of `.single()`
-- ✅ **Removed dead code** - cleaned dependencies
+## Secrets
 
-### Database:
-- ✅ **Added sessions table** (was missing)
-- ✅ **Proper indexes** for fast queries
-- ✅ **Fixed schema** with all tables
+Never commit secrets. `bot/.env` on the VPS is the only place they live; see
+`bot/.env.example` for the full list. The previously committed Facebook password,
+Gmail app password and proxy credentials were exposed in git history and **must be
+rotated**.
 
----
+## VPS layout
 
-## 📋 DEPLOYMENT STEPS
+| Item | Path / name |
+| --- | --- |
+| App dir | `/opt/fiesta` (git clone of `main`) |
+| Env file | `/opt/fiesta/bot/.env` (chmod 600) |
+| Service | `fiesta-bot.service` (`Restart=always`, `WantedBy=multi-user.target`) |
+| Display | `xvfb-run` wrapper — required because `HEADLESS=false` |
+| Health | `http://127.0.0.1:8080` (local only) |
+| Heartbeat | `sessions.__heartbeat__` row in Supabase, written every 60s |
 
-### Step 1: Commit and Push to GitHub
+## Commands
 
 ```bash
-cd /Users/ilse/Downloads/Career-ops/Fiesta-Fresh-Comments-Automation/Fiesta-Fresh-Comments-Automation
+# status / logs
+sudo systemctl status fiesta-bot
+sudo journalctl -u fiesta-bot -f
 
-# Add all changes
-git add -A
+# restart / stop
+sudo systemctl restart fiesta-bot
+sudo systemctl stop fiesta-bot
 
-# Commit
-git commit -m "v2.0: Fixed bot - dedup, loop, human behavior, keyword filter, render deployment"
-
-# Push to GitHub
-git push origin cleanup-phase1
+# deploy latest main
+sudo /opt/fiesta/scripts/deploy.sh
 ```
 
-If you get an error about upstream not set:
-```bash
-git push -u origin cleanup-phase1
-```
+## How a cycle works
 
----
+1. Check `config.bot_status` (dashboard toggle) — pause honoured immediately.
+2. Restore Facebook cookies from `sessions` for the rotating account; on failure,
+   screenshot to Supabase Storage, mark session down, email one alert.
+3. **Phase 1** — post the reply template to every `leads.status = 'approved'`
+   row not already in `replies_log`, then the Account 3 website-URL booster.
+4. **Phase 1.5** — scrape `/notifications` for new group posts and act on leads.
+5. **Phase 2** — patrol a rotating slice of `GROUPS_PER_CYCLE` target groups and
+   queue matches as approved leads.
+6. Write the heartbeat, sleep `SCAN_INTERVAL_SECONDS`, repeat forever.
 
-### Step 2: Deploy Bot to Render.com
-
-1. **Go to:** https://render.com/dashboard
-2. **Click:** "New +" → "Web Service"
-3. **Connect GitHub Repository:**
-   - Select: `support897/Fiesta-Fresh-Comments-Automation`
-   - Branch: `cleanup-phase1` (or `main` after merge)
-4. **Configure:**
-   - Name: `fiesta-fresh-bot`
-   - Region: `Oregon (US West)` or closest to you
-   - Root Directory: `bot`
-   - Environment: `Docker`
-   - Dockerfile Path: `bot/Dockerfile`
-   - Plan: `Free`
-5. **Add Environment Variables:** (Click "Advanced" → "Add Environment Variable")
-
-```
-SUPABASE_URL = https://xmxywlyqdqrfrojwggkt.supabase.co
-SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhteHl3bHlxZHFyZnJvandnZ2t0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzMzI4NjUsImV4cCI6MjEwMTkwODg2NX0.p9i_3rge9IuoYz6qgL5J6dZjwptZyKU7S7AP1Bh_EHQ
-
-FB_EMAIL = placenciailse@gmail.com
-FB_PASSWORD = 20inPG05$$
-
-PROXY_SERVER = socks5://204.1.138.221:50101
-PROXY_USERNAME = jackpotvault
-PROXY_PASSWORD = EYDi73Q5H6
-
-GEMINI_API_KEY = your_gemini_api_key_here
-
-DRY_RUN = false
-SCAN_INTERVAL_SECONDS = 60
-PORT = 8080
-```
-
-6. **Click:** "Create Web Service"
-7. **Wait:** 5-10 minutes for build to complete
-
----
-
-### Step 3: Deploy Dashboard to Vercel
-
-1. **Go to:** https://vercel.com/new
-2. **Import Git Repository:**
-   - Connect GitHub
-   - Select: `support897/Fiesta-Fresh-Comments-Automation`
-3. **Configure:**
-   - Framework Preset: `Next.js`
-   - Root Directory: `dashboard`
-   - Build Command: `npm run build`
-   - Output Directory: `.next`
-4. **Add Environment Variables:**
-
-```
-NEXT_PUBLIC_SUPABASE_URL = https://xmxywlyqdqrfrojwggkt.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhteHl3bHlxZHFyZnJvandnZ2t0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzMzI4NjUsImV4cCI6MjEwMTkwODg2NX0.p9i_3rge9IuoYz6qgL5J6dZjwptZyKU7S7AP1Bh_EHQ
-```
-
-5. **Click:** "Deploy"
-6. **Wait:** 2-3 minutes
-
----
-
-### Step 4: Activate the Bot
-
-1. **Go to your dashboard URL** (Vercel will give you the URL)
-2. **Toggle the bot switch to ON** (this sets `bot_status = true` in Supabase)
-3. **Check Render logs:**
-   - Go to Render dashboard → your service → "Logs" tab
-   - You should see: `🤖 Starting Fiesta Fresh Automation Bot...`
-
----
-
-## 🧪 Testing Mode (Recommended First)
-
-To test without actually posting comments:
-
-1. **In Render:** Set environment variable `DRY_RUN = true`
-2. **Redeploy** (Render → Manual Deploy)
-3. **Check logs** - you'll see `[DRY RUN]` messages showing what WOULD be posted
-4. **Once satisfied:** Set `DRY_RUN = false` and redeploy
-
----
-
-## 📊 Monitoring
-
-### Check if Bot is Running:
-- **Render Logs:** https://dashboard.render.com → Your service → Logs
-- **Supabase:** Check `leads` table for new pending posts
-- **Dashboard:** Should show stats updating
-
-### Common Issues:
-
-**Issue:** Bot not finding posts
-**Fix:** Check Facebook groups are still accessible, cookies not expired
-
-**Issue:** "Chromium not found"
-**Fix:** Render will install it automatically on first deploy (takes 5-10 min)
-
-**Issue:** Bot pauses after one cycle
-**Fix:** Make sure `bot_status = true` in Supabase config table
-
-**Issue:** Double commenting
-**Fix:** Check `replies_log` table has the composite unique constraint
-
----
-
-## 🎯 Next Steps After Deployment
-
-1. **Monitor for 24 hours** in DRY_RUN mode
-2. **Check dashboard** - review pending leads in swipe deck
-3. **Approve a few leads** manually
-4. **Set DRY_RUN=false** to go live
-5. **Watch the magic happen** ✨
-
----
-
-## 🆘 Support
-
-If deployment fails:
-1. Check Render build logs for errors
-2. Check Supabase database is accessible
-3. Verify all environment variables are set
-4. Check GitHub repo has all files committed
-
----
-
-## 📝 Environment Variables Summary
-
-### Bot (Render):
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_ANON_KEY` - Your Supabase anon key
-- `FB_EMAIL` - Facebook login email
-- `FB_PASSWORD` - Facebook login password
-- `PROXY_SERVER` - (Optional) SOCKS5 proxy
-- `PROXY_USERNAME` - (Optional) Proxy username
-- `PROXY_PASSWORD` - (Optional) Proxy password
-- `GEMINI_API_KEY` - Google Gemini API key for AI evaluation
-- `DRY_RUN` - `true` for testing, `false` for live
-- `SCAN_INTERVAL_SECONDS` - How often to scan (default: 60)
-- `PORT` - Port for health check (default: 8080)
-
-### Dashboard (Vercel):
-- `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Your Supabase anon key
-
----
-
-**🎉 You're all set! The bot will run 24/7 on Render VPS and never miss a lead again.**
+Classification: keyword approve-list → disqualifier list → Gemini for anything
+else mentioning "clean". Without `GEMINI_API_KEY` borderline posts fall back to a
+naive `includes('clean')` check, which produces false positives.
