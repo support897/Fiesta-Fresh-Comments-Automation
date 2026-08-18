@@ -1,0 +1,23 @@
+[Unit]
+Description=Fiesta Fresh Facebook comments bot (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/opt/fiesta/bot
+EnvironmentFile=/opt/fiesta/bot/.env
+# Headed Chrome inside a virtual display — Facebook kills headless sessions.
+ExecStart=/usr/bin/xvfb-run -a --server-args="-screen 0 1280x800x24" /usr/bin/npx tsx bot.ts
+Restart=always
+RestartSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fiesta-bot
+# Keep the box alive if Chromium leaks on a 1GB VPS
+MemoryMax=1500M
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target
