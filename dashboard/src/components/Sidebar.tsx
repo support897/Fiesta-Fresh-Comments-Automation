@@ -2,6 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -15,8 +16,32 @@ import {
   Cookie,
 } from "lucide-react";
 
+const HEARTBEAT_KEY = "__heartbeat__";
+const HEARTBEAT_STALE_SECONDS = 300;
+
 export function Sidebar() {
   const pathname = usePathname();
+  const [vpsOnline, setVpsOnline] = React.useState(false);
+  const [vpsLastSeen, setVpsLastSeen] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const { data } = await supabase
+        .from("sessions")
+        .select("cookies, updated_at")
+        .eq("user_email", HEARTBEAT_KEY)
+        .maybeSingle();
+      if (cancelled) return;
+      const beat = Array.isArray(data?.cookies) ? (data!.cookies as any[])[0] : null;
+      const ts: string | null = beat?.ts ?? data?.updated_at ?? null;
+      setVpsLastSeen(ts);
+      setVpsOnline(!!ts && (Date.now() - new Date(ts).getTime()) / 1000 < HEARTBEAT_STALE_SECONDS);
+    };
+    check();
+    const iv = setInterval(check, 60000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
 
   const navSections = [
     {
@@ -103,10 +128,13 @@ export function Sidebar() {
       {/* Footer Version */}
       <div className="p-4 border-t border-slate-100 flex flex-col gap-2 bg-white">
         <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
-          <span>Version 1.1.0</span>
-          <span className="flex items-center gap-1 text-emerald-600 font-bold lowercase">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            vps 24/7
+          <span>Version 1.2.0</span>
+          <span
+            title={vpsLastSeen ? `Last heartbeat: ${new Date(vpsLastSeen).toLocaleString("en-AU")}` : "No heartbeat recorded"}
+            className={`flex items-center gap-1 font-bold lowercase ${vpsOnline ? "text-emerald-600" : "text-red-600"}`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${vpsOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`}></span>
+            {vpsOnline ? "vps live" : "vps offline"}
           </span>
         </div>
       </div>
