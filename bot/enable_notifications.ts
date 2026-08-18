@@ -176,7 +176,9 @@ async function run() {
     }
 
     for (let i = 0; i < ACCOUNTS.length; i++) {
-        await setNotificationsForAccount(ACCOUNTS[i], i, groupsToScan);
+        const acct = ACCOUNTS[i];
+        if (!acct) continue;
+        await setNotificationsForAccount(acct, i, groupsToScan);
     }
     
     console.log("\n✅✅ All accounts finished setting up notifications!");

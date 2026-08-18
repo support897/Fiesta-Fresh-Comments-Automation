@@ -34,9 +34,12 @@ let lastDailyReportDate = '';
 let reportFilePath = '';
 
 async function sendDailyReportEmail() {
-    const user = process.env.ALERT_EMAIL || "projects.reports.ilse@gmail.com";
-    const pass = process.env.ALERT_EMAIL_PASSWORD || "opdc jayw chod qjbp";
-    if (!user || !pass) return;
+    const user = process.env.ALERT_EMAIL;
+    const pass = process.env.ALERT_EMAIL_PASSWORD;
+    if (!user || !pass) {
+        console.warn("\u26a0\ufe0f ALERT_EMAIL / ALERT_EMAIL_PASSWORD not set — skipping daily report.");
+        return;
+    }
 
     try {
         const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -388,9 +391,22 @@ const DISQUALIFIER_KEYWORDS = [
 /**
  * Capped minimal delay for reliability but fast bot execution
  */
-async function randomDelay(min: number = 0, max: number = 10) {
-    // Delays reduced to practically zero to operate as bot lightning fast
-    await new Promise(resolve => setTimeout(resolve, 10));
+async function randomDelay(min: number = 800, max: number = 2500) {
+    // Real randomised delays. Facebook was killing sessions within ~1hr when
+    // every action fired back-to-back with a fixed 10ms gap.
+    const lo = Math.max(0, Math.min(min, max));
+    const hi = Math.max(lo, max);
+    const ms = lo + Math.floor(Math.random() * (hi - lo + 1));
+    await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Longer cool-down between write actions (comments), in seconds. */
+async function coolDown(label: string) {
+    const min = parseInt(process.env.COMMENT_DELAY_MIN_SECONDS || '45');
+    const max = parseInt(process.env.COMMENT_DELAY_MAX_SECONDS || '150');
+    const secs = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
+    console.log(`\u23f3 Cool-down ${secs}s before ${label}...`);
+    await new Promise(r => setTimeout(r, secs * 1000));
 }
 
 /**
@@ -398,7 +414,20 @@ async function randomDelay(min: number = 0, max: number = 10) {
  */
 async function humanType(page: any, selector: string, text: string) {
     await page.click(selector, { force: true }).catch(() => {});
-    await page.keyboard.insertText(text);
+    // Per-character typing with jitter — instant insertText is a strong bot tell.
+    for (const ch of text) {
+        await page.keyboard.type(ch, { delay: 40 + Math.floor(Math.random() * 110) });
+    }
+}
+
+/** Types the reply body with human-ish cadence, chunked so long templates stay quick enough. */
+async function typeComment(page: any, text: string) {
+    const chunks = text.split(/(\n\n)/);
+    for (const chunk of chunks) {
+        if (!chunk) continue;
+        await page.keyboard.insertText(chunk);
+        await randomDelay(350, 1200);
+    }
 }
 
 /**
@@ -648,7 +677,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
                 const resolvedUrl = new URL(boosterPage.url());
                 targetUrl = `${resolvedUrl.origin}${resolvedUrl.pathname.replace(/\/$/, '')}/posts/${postId}`;
             } else {
-                targetUrl = `${groupUrl.split('?')[0].replace(/\/$/, '')}/posts/${postId}`;
+                targetUrl = `${(groupUrl.split('?')[0] ?? groupUrl).replace(/\/$/, '')}/posts/${postId}`;
             }
         }
 
@@ -737,6 +766,124 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
         console.error("⚠️ Failed to scan notifications:", e.message);
     }
     return postUrls;
+}
+
+/**
+ * Writes a liveness beacon to Supabase so the Vercel dashboard can show a REAL
+ * health state instead of a hardcoded "24/7" badge. Uses the sessions table
+ * (no schema change / DDL needed) under the reserved key __heartbeat__.
+ */
+const HEARTBEAT_KEY = '__heartbeat__';
+async function writeHeartbeat(extra: Record<string, any> = {}) {
+    try {
+        await supabase.from('sessions').upsert({
+            user_email: HEARTBEAT_KEY,
+            cookies: [{
+                ts: new Date().toISOString(),
+                host: process.env.HOSTNAME || 'vps',
+                mode: DRY_RUN ? 'dry_run' : 'live',
+                cycles: cycleCount,
+                running: isRunning,
+                interval_seconds: SCAN_INTERVAL / 1000,
+                ...extra,
+            }],
+            updated_at: new Date(),
+        });
+    } catch (e: any) {
+        console.error("\u26a0\ufe0f Heartbeat write failed:", e.message);
+    }
+}
+
+/**
+ * PHASE 2 — patrol the target groups directly.
+ * Notification scraping alone only ever sees posts Facebook chooses to notify
+ * about, so the 104 configured groups were effectively unmonitored. This walks
+ * a rotating slice of active groups each cycle, classifies posts, and queues
+ * matches as approved leads for the next execute phase.
+ */
+let groupCursor = 0;
+const groupCursorFile = path.join(__dirname, 'group_cursor.txt');
+try {
+    if (fs.existsSync(groupCursorFile)) groupCursor = parseInt(fs.readFileSync(groupCursorFile, 'utf8').trim()) || 0;
+} catch { /* ignore */ }
+
+async function patrolGroups(page: any) {
+    const perCycle = parseInt(process.env.GROUPS_PER_CYCLE || '10');
+    if (perCycle <= 0) { console.log("\u23ed\ufe0f Group patrol disabled (GROUPS_PER_CYCLE=0)."); return; }
+
+    let groups: string[] = [];
+    try {
+        const { data } = await supabase.from('groups').select('url, is_active');
+        groups = (data || []).filter((g: any) => g.is_active !== false).map((g: any) => g.url).filter(Boolean);
+    } catch (e: any) {
+        console.error("\u26a0\ufe0f Could not load groups from Supabase:", e.message);
+    }
+    if (groups.length === 0) {
+        try {
+            groups = JSON.parse(fs.readFileSync(path.join(__dirname, 'target_groups.json'), 'utf8'));
+        } catch { /* ignore */ }
+    }
+    if (groups.length === 0) { console.log("\u26a0\ufe0f No target groups configured — skipping patrol."); return; }
+
+    const slice: string[] = [];
+    for (let i = 0; i < Math.min(perCycle, groups.length); i++) {
+        slice.push(groups[(groupCursor + i) % groups.length]!);
+    }
+    groupCursor = (groupCursor + slice.length) % groups.length;
+    try { fs.writeFileSync(groupCursorFile, String(groupCursor), 'utf8'); } catch { /* ignore */ }
+
+    console.log(`\ud83d\udd0d PHASE 2: Patrolling ${slice.length}/${groups.length} groups (cursor now ${groupCursor})...`);
+
+    const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
+    const seen = new Set((postedReplies || []).map((r: any) => String(r.post_id)));
+    const { data: knownLeads } = await supabase.from('leads').select('post_id');
+    for (const l of knownLeads || []) seen.add(String(l.post_id));
+
+    for (const groupUrl of slice) {
+        try {
+            console.log(`\ud83c\udfe1 Group: ${groupUrl.slice(0, 80)}`);
+            await page.goto(groupUrl, { waitUntil: 'commit', timeout: 45000 });
+            await randomDelay(2500, 5000);
+            await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
+
+            for (let scroll = 0; scroll < 3; scroll++) {
+                const posts = page.locator('[role="article"]');
+                const count = Math.min(await posts.count().catch(() => 0), 25);
+                for (let i = 0; i < count; i++) {
+                    const el = posts.nth(i);
+                    const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+                    if (!text || text.length < 25) continue;
+
+                    const decision = quickKeywordFilter(text);
+                    let isLead = decision === 'approve';
+                    if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
+                    if (!isLead) continue;
+
+                    let postId = await extractFacebookPostId(el);
+                    if (!postId) {
+                        postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
+                    }
+                    if (seen.has(String(postId))) continue;
+                    seen.add(String(postId));
+
+                    console.log(`\ud83c\udfaf PATROL LEAD ${postId} — queued as approved.`);
+                    const { error } = await supabase.from('leads').insert({
+                        post_id: postId,
+                        group_url: groupUrl,
+                        post_text: text.slice(0, 4000),
+                        status: 'approved',
+                    });
+                    if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
+                }
+                await page.mouse.wheel(0, 1400).catch(() => {});
+                await randomDelay(1800, 4000);
+            }
+            await randomDelay(4000, 9000); // pace between groups
+        } catch (e: any) {
+            console.error(`\u26a0\ufe0f Patrol error on ${groupUrl.slice(0, 60)}: ${e.message?.slice(0, 100)}`);
+        }
+    }
+    console.log("\u2705 PHASE 2 patrol complete.");
 }
 
 async function runBot(account: FbAccount): Promise<boolean> {
@@ -1128,8 +1275,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
                         if (inputReady) {
                             await commentInput.click({ timeout: 3000 }).catch(() => {});
-                            console.log(`📍 Inserting text...`);
-                            await page.keyboard.insertText(templateText);
+                            console.log(`📍 Typing reply...`);
+                            await typeComment(page, templateText);
                             console.log(`📍 Pressing Enter...`);
                             await page.keyboard.press('Enter');
 
@@ -1146,9 +1293,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                 .select();
                             console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
 
-                            console.log(`⏳ Pausing before Account 3 booster...`);
-                            await randomDelay(100, 200);
+                            await coolDown('Account 3 booster comment');
                             await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                            await coolDown('next lead');
                         } else {
                             console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}. Marking status to prevent infinite loop.`);
                             await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
@@ -1216,7 +1363,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                         }
 
                                         await activeBox.click({ timeout: 3000 }).catch(() => {});
-                                        await page.keyboard.insertText(templateText);
+                                        await typeComment(page, templateText);
                                         await page.keyboard.press('Enter');
 
                                         const { error: replyErr } = await supabase.from('replies_log').insert({
@@ -1233,8 +1380,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                         console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
                                         found = true;
 
-                                        await randomDelay(100, 200);
+                                        await coolDown('Account 3 booster comment');
                                         await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                                        await coolDown('next lead');
                                         break;
                                     }
                                 }
@@ -1280,7 +1428,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 } else {
                     const multiMatch = url.match(/multi_permalinks=([^&]+)/);
                     if (multiMatch && multiMatch[1]) {
-                        postID = decodeURIComponent(multiMatch[1]).split(',')[0];
+                        postID = decodeURIComponent(multiMatch[1]).split(',')[0] ?? postID;
                     }
                 }
 
@@ -1288,7 +1436,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     .from('replies_log')
                     .select('*')
                     .eq('post_id', postID)
-                    .single();
+                    .maybeSingle();
                 
                 if (alreadyReplied) {
                     console.log("   ⏭️ Already replied to this post. Skipping.");
@@ -1327,14 +1475,15 @@ We will also send you a DM just in case you have any questions. Make sure to che
                     
                     if (await commentBox.isVisible({ timeout: 5000 })) {
                         await commentBox.click({ force: true }).catch(() => {});
-                        await page.keyboard.insertText(templateText);
+                        await typeComment(page, templateText);
                         await page.keyboard.press('Enter');
                         console.log(`✅ Direct comment posted on notification post ${postID}!`);
                         
                         await supabase.from('leads').insert({ post_id: postID, group_url: url, post_text: postText, status: 'posted' });
                         await supabase.from('replies_log').insert({ post_id: postID, group_url: url, comment_id: `comment_${Date.now()}`, replied_at: new Date() });
-                        await randomDelay(100, 200);
+                        await coolDown('Account 3 booster comment');
                         await postWebsiteUrlBoosterReply(url, postID);
+                        await coolDown('next notification lead');
                     } else {
                         console.warn(`⚠️ Could not find comment box for notification post ${postID}`);
                     }
@@ -1343,6 +1492,9 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 console.error(`⚠️ Error processing notification URL ${url}:`, e.message);
             }
         }
+
+        // PHASE 2: Patrol the configured target groups directly
+        await patrolGroups(page);
 
     } catch (e) {
         console.error("💥 Error:", e);
@@ -1374,7 +1526,7 @@ async function main() {
     http.createServer(async (req, res) => {
         let cfg: any = null;
         try {
-            const r = await supabase.from('config').select('bot_status').single();
+            const r = await supabase.from('config').select('bot_status').maybeSingle();
             cfg = r.data ?? null;
         } catch { /* health endpoint stays up even if config fails */ }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1428,8 +1580,13 @@ async function main() {
             isRunning = false;
             cycleCount++;
             lastCycleTime = new Date().toISOString();
+            await writeHeartbeat({ last_cycle: lastCycleTime });
         }
     };
+
+    await writeHeartbeat({ event: 'boot' });
+    // Independent heartbeat so the dashboard sees liveness mid-cycle too
+    setInterval(() => { writeHeartbeat({ last_cycle: lastCycleTime }); }, 60000);
 
     // Run immediately, then on interval
     await cycle();
