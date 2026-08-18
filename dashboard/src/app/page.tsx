@@ -45,6 +45,26 @@ type Config = {
   bot_status: boolean;
 };
 
+type Health = {
+  online: boolean;
+  ageSeconds: number | null;
+  lastSeen: string | null;
+  cycles: number | null;
+  mode: string | null;
+  intervalSeconds: number | null;
+};
+
+type ProfileStatus = {
+  connected: boolean;
+  updatedAt: string | null;
+  cookieCount: number;
+};
+
+/** Bot writes a beacon to sessions.__heartbeat__ every 60s from the VPS. */
+const HEARTBEAT_KEY = "__heartbeat__";
+/** Treat the VPS as offline if the beacon is older than this. */
+const HEARTBEAT_STALE_SECONDS = 300;
+
 /* ─────────────────────── constants ── */
 const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
 
@@ -76,10 +96,19 @@ function displayAccount(raw: string | null, commentId: string | null): string {
 }
 
 const PROFILES = [
-  { name: "Ilse",            initial: "I", sub: "File: 1.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
-  { name: "Taylor",          initial: "T", sub: "File: 2.json · 50% Main Reply",          color: "bg-slate-50 text-slate-700" },
-  { name: "Website Booster", initial: "W", sub: "File: account3_cookies.json · 100% URL", color: "bg-blue-50 text-blue-600"   },
+  { name: "Ilse",            key: "ilse2taylor@gmail.com",            initial: "I", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
+  { name: "Taylor",          key: "projects.reports.ilse@gmail.com",  initial: "T", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
+  { name: "Website Booster", key: "account3",                         initial: "W", sub: "100% URL drop",   color: "bg-blue-50 text-blue-600"   },
 ];
+
+function agoLabel(iso: string | null): string {
+  if (!iso) return "never";
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
 
 /* ─────────────────────── component ── */
 export default function DashboardPage() {
@@ -95,7 +124,8 @@ export default function DashboardPage() {
   const [triggering, setTriggering]     = useState(false);
   const [selectedReply, setSelectedReply] = useState<ReplyLog | null>(null);
   const [copied, setCopied]             = useState(false);
-  const [nextScan, setNextScan]         = useState("");
+  const [health, setHealth]             = useState<Health>({ online: false, ageSeconds: null, lastSeen: null, cycles: null, mode: null, intervalSeconds: null });
+  const [profileStatus, setProfileStatus] = useState<Record<string, ProfileStatus>>({});
 
   /* ── fetch all real data from Supabase (VPS syncs here) ── */
   const loadData = useCallback(async () => {
@@ -130,14 +160,54 @@ export default function DashboardPage() {
         activeGroups:    activeGroups ?? 0,
       });
 
-      // Real replies — newest first
-      const { data: replyData } = await supabase
+      // Real replies — newest first.
+      // NOTE: replies_log has no account_name/comment_url columns; selecting them
+      // made the whole query fail, so the table rendered empty while the count
+      // above still showed a number. Select only real columns.
+      const { data: replyData, error: replyErr } = await supabase
         .from("replies_log")
-        .select("id, post_id, group_url, account_name, comment_id, comment_url, replied_at")
+        .select("id, post_id, group_url, comment_id, user_profile_id, replied_at")
         .order("replied_at", { ascending: false })
         .limit(100);
+      if (replyErr) console.error("replies_log query error:", replyErr.message);
 
-      setReplies((replyData ?? []) as ReplyLog[]);
+      setReplies(((replyData ?? []) as any[]).map((r) => ({
+        ...r,
+        account_name: r.user_profile_id ?? null,
+        comment_url: null,
+      })) as ReplyLog[]);
+
+      // Real session/cookie state + VPS heartbeat
+      const { data: sessionRows } = await supabase
+        .from("sessions")
+        .select("user_email, cookies, updated_at");
+
+      const statusMap: Record<string, ProfileStatus> = {};
+      let beacon: any = null;
+      for (const row of sessionRows ?? []) {
+        const cookies = Array.isArray(row.cookies) ? row.cookies : [];
+        if (row.user_email === HEARTBEAT_KEY) {
+          beacon = { payload: cookies[0] ?? null, updated_at: row.updated_at };
+          continue;
+        }
+        statusMap[row.user_email] = {
+          connected: cookies.length > 0,
+          updatedAt: row.updated_at,
+          cookieCount: cookies.length,
+        };
+      }
+      setProfileStatus(statusMap);
+
+      const lastSeen = beacon?.payload?.ts ?? beacon?.updated_at ?? null;
+      const ageSeconds = lastSeen ? Math.floor((Date.now() - new Date(lastSeen).getTime()) / 1000) : null;
+      setHealth({
+        online: ageSeconds !== null && ageSeconds < HEARTBEAT_STALE_SECONDS,
+        ageSeconds,
+        lastSeen,
+        cycles: beacon?.payload?.cycles ?? null,
+        mode: beacon?.payload?.mode ?? null,
+        intervalSeconds: beacon?.payload?.interval_seconds ?? null,
+      });
     } catch (e) {
       console.error("loadData error:", e);
     } finally {
@@ -147,14 +217,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadData();
-
-    // Next scan banner — every 30 min
-    const now = new Date();
-    const next = new Date(now.getTime() + (30 - (now.getMinutes() % 30)) * 60000);
-    next.setSeconds(0);
-    setNextScan(
-      next.toLocaleString("en-AU", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
-    );
 
     // Live Supabase subscription
     const ch = supabase
@@ -262,7 +324,9 @@ export default function DashboardPage() {
             <Users size={24} className="text-indigo-600" />
           </div>
           <div>
-            <div className="text-3xl font-black text-slate-900">3 / 3</div>
+            <div className="text-3xl font-black text-slate-900">
+              {PROFILES.filter((p) => profileStatus[p.key]?.connected).length} / {PROFILES.length}
+            </div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Profiles</div>
           </div>
         </div>
@@ -292,23 +356,45 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-800">{p.name}</h4>
-                  <p className="text-[10px] text-slate-400">{p.sub}</p>
+                  <p className="text-[10px] text-slate-400">
+                    {p.sub} · updated {agoLabel(profileStatus[p.key]?.updatedAt ?? null)}
+                  </p>
                 </div>
               </div>
-              <span className="px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600 border border-emerald-100">
-                ● Connected
+              <span className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border",
+                profileStatus[p.key]?.connected
+                  ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                  : "bg-red-50 text-red-600 border-red-100"
+              )}>
+                {profileStatus[p.key]?.connected ? "● Connected" : "● Session down"}
               </span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Next Scan Banner */}
-      <div className="bg-gradient-to-r from-blue-500 to-indigo-600 rounded-3xl p-6 text-white shadow-lg shadow-blue-500/20">
-        <div className="text-[10px] font-bold tracking-widest uppercase opacity-75">Next Scheduled Scan</div>
-        <div className="text-2xl font-black mt-1">{nextScan || "Every 30 min · 24/7"}</div>
-        <div className="text-xs opacity-75 mt-1">
-          {isBotActive ? "🟢 Bot active — scanning all target groups continuously" : "⏸ Bot paused"}
+      {/* Live VPS engine banner — driven by the bot's Supabase heartbeat */}
+      <div className={cn(
+        "rounded-3xl p-6 text-white shadow-lg",
+        health.online
+          ? "bg-gradient-to-r from-blue-500 to-indigo-600 shadow-blue-500/20"
+          : "bg-gradient-to-r from-red-500 to-rose-600 shadow-red-500/20"
+      )}>
+        <div className="text-[10px] font-bold tracking-widest uppercase opacity-75">VPS Engine Status</div>
+        <div className="text-2xl font-black mt-1">
+          {health.online
+            ? `Online · last beat ${agoLabel(health.lastSeen)}`
+            : health.lastSeen
+              ? `OFFLINE · last beat ${agoLabel(health.lastSeen)}`
+              : "OFFLINE · no heartbeat yet"}
+        </div>
+        <div className="text-xs font-semibold mt-2 opacity-90">
+          {!health.online
+            ? "🔴 No heartbeat from the VPS — the bot is not scanning. Check the fiesta-bot service."
+            : !isBotActive
+              ? "⏸ VPS alive but bot is paused in config — no comments will be posted."
+              : `🟢 Scanning every ${Math.round((health.intervalSeconds ?? 1800) / 60)} min · ${health.cycles ?? 0} cycles · ${health.mode === "dry_run" ? "DRY RUN" : "live"}`}
         </div>
       </div>
 
@@ -318,7 +404,7 @@ export default function DashboardPage() {
           <div>
             <h3 className="text-lg font-bold text-slate-900">Comments Posted</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              {stats.commentsPosted} total · live from VPS via Supabase
+              {stats.commentsPosted} total · live from VPS via Supabase{replies.length ? ` · showing latest ${replies.length}` : ""}
             </p>
           </div>
         </div>
