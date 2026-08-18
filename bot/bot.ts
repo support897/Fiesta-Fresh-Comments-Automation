@@ -229,7 +229,9 @@ const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '1800') * 10
 // --- Account Configuration ---
 // FB_ACCOUNTS = JSON array of {email, password} for multi-account rotation
 // Falls back to FB_EMAIL/FB_PASSWORD for backward compatibility
-interface FbAccount { email: string; password: string; }
+// password is optional: cookie-only accounts are supported so the bot never
+// attempts a password login with a placeholder/missing secret.
+interface FbAccount { email: string; password?: string | undefined; }
 
 function loadAccounts(): FbAccount[] {
     const raw = process.env.FB_ACCOUNTS;
@@ -237,15 +239,15 @@ function loadAccounts(): FbAccount[] {
         try {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed) && parsed.length > 0) {
-                return parsed.filter((a: any) => a.email && a.password);
+                return parsed.filter((a: any) => a.email);
             }
         } catch (e) {
             console.error("⚠️ Invalid FB_ACCOUNTS JSON, falling back to FB_EMAIL/FB_PASSWORD.");
         }
     }
     const single: FbAccount[] = [];
-    if (process.env.FB_EMAIL && process.env.FB_PASSWORD) {
-        single.push({ email: process.env.FB_EMAIL!, password: process.env.FB_PASSWORD! });
+    if (process.env.FB_EMAIL) {
+        single.push({ email: process.env.FB_EMAIL!, password: process.env.FB_PASSWORD });
     }
     return single;
 }
@@ -1024,11 +1026,15 @@ async function runBot(account: FbAccount): Promise<boolean> {
         const loginMarkers = page.locator('#email, [name="email"], #pass, [name="pass"]');
         const homeMarkers = page.locator('[aria-label="Your profile"], [aria-label="Facebook"], [aria-label*="Home"]');
 
-        if (await loginMarkers.first().isVisible()) {
+        const hasUsablePassword = !!fbPassword && fbPassword !== 'REPLACE_ME';
+
+        if (await loginMarkers.first().isVisible() && !hasUsablePassword) {
+            console.warn(`🔒 Login screen shown for ${fbEmail} but no usable password is configured — cookie-only mode. Re-prime this account's cookies (dashboard → Cookies).`);
+        } else if (await loginMarkers.first().isVisible()) {
             console.log("🔒 Login screen detected. Logging in...");
             await humanType(page, '[name="email"]', fbEmail);
             await randomDelay(800, 1500);
-            await humanType(page, '[name="pass"]', fbPassword);
+            await humanType(page, '[name="pass"]', fbPassword!);
             await page.keyboard.press('Enter');
             await randomDelay(1000, 2000);
             await page.click('button[name="login"], [aria-label="Log in"], [aria-label="Log In"], input[type="submit"]').catch(() => null);
@@ -1057,8 +1063,11 @@ async function runBot(account: FbAccount): Promise<boolean> {
             && !currentUrl.includes('recaptcha');
 
         if (!isLogged) {
-            console.log(`🔒 Cookie verification failed for ${fbEmail}. Attempting automated re-login...`);
+            console.log(`🔒 Cookie verification failed for ${fbEmail}.`);
             try {
+                if (!hasUsablePassword) {
+                    throw new Error('cookie-only mode: no password configured, skipping automated re-login');
+                }
                 // Clear existing session context cookies to get a clean slate
                 await context.clearCookies();
                 await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 45000 });
