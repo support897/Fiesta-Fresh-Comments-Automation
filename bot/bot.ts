@@ -362,32 +362,288 @@ async function extractFacebookPostIdFromMessage(message: any): Promise<string | 
     }
 }
 
-// High-Precision Zero-API Keyword Engine (No Cloud API Required)
-const INTENT_LEAD_KEYWORDS = [
-    "looking for a cleaner", "looking for cleaner", "looking for cleaners",
-    "recommend a cleaner", "recommend cleaner", "recommendation for cleaner", "recommendations for cleaner",
-    "need a cleaner", "need cleaner", "cleaner needed", "cleaner wanted", "cleaners wanted",
-    "who does cleaning", "anyone know a cleaner", "anyone know a good cleaner",
-    "can anyone recommend a cleaner", "searching for a cleaner", "require a cleaner",
-    "hiring a cleaner", "hire a cleaner", "help with cleaning", "assistance with cleaning",
-    "looking for bond clean", "looking for bond cleaner", "need bond clean", "bond clean needed",
-    "need house cleaner", "looking for house cleaner", "house cleaner needed",
-    "end of lease clean", "bond clean", "bond cleaning", "house cleaning", "deep clean",
-    "carpet cleaning", "window cleaning", "air bnb cleaning", "airbnb cleaning", "office cleaning",
-    "commercial cleaning", "builder clean", "builders clean", "regular clean", "weekly clean",
-    "fortnightly clean", "cleaner for home", "cleaner for house", "cleaner for flat", "cleaner for apartment",
-    "seeking cleaner", "seeking a cleaner", "cleaner recommendation", "good cleaner",
-    "reliable cleaner", "cleaning service needed", "looking for cleaning service"
+// ─────────────────────────────────────────────────────────────────────────────
+// ZERO-API KEYWORD ENGINE v3
+//
+// Designed to classify correctly WITHOUT any LLM call. Three signal sets are
+// combined instead of relying on one flat phrase list:
+//
+//   1. DISQUALIFIERS   — competitors advertising, job seekers, unrelated trades,
+//                        unrelated senses of the word "clean". Checked first.
+//   2. STRONG_LEAD     — phrases that on their own prove someone wants a cleaner.
+//   3. SERVICE + ASK   — a cleaning SERVICE word (bond clean, carpet cleaning…)
+//                        combined with a REQUEST signal (looking for, need,
+//                        recommend, quote, ISO, after a…) is also a lead.
+//
+// All matching is word-boundary based on normalised text, so "cleaner" no longer
+// matches inside "vacuum cleaner for sale" style traps and punctuation/emoji
+// between words can't break a phrase.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Lowercase, strip emoji/punctuation, collapse whitespace. */
+function normalizeForMatch(text: string): string {
+    return (text || '')
+        .toLowerCase()
+        .replace(/[’‘`]/g, "'")
+        .replace(/[^a-z0-9'\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/** Whole-phrase, word-boundary match (phrases may contain spaces). */
+function hasPhrase(haystack: string, phrase: string): boolean {
+    const p = phrase.toLowerCase().replace(/[^a-z0-9'\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!p) return false;
+    return new RegExp(`(^|\\s)${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`).test(haystack);
+}
+
+function firstMatch(haystack: string, phrases: string[]): string | null {
+    for (const p of phrases) if (hasPhrase(haystack, p)) return p;
+    return null;
+}
+
+/** Cleaning services Fiesta Fresh actually sells. */
+const SERVICE_KEYWORDS = [
+    // core
+    'cleaner', 'cleaners', 'cleaning', 'clean', 'cleans', 'cleaned',
+    'house cleaner', 'house cleaning', 'home cleaner', 'home cleaning',
+    'domestic cleaner', 'domestic cleaning', 'housekeeper', 'housekeeping',
+    'house keeper', 'home help', 'cleaning lady', 'cleaning service',
+    'cleaning services', 'cleaning company', 'cleaning business',
+    // end of lease / moving
+    'bond clean', 'bond cleaning', 'bond cleaner', 'end of lease clean',
+    'end of lease cleaning', 'end of lease cleaner', 'exit clean', 'exit cleaning',
+    'vacate clean', 'vacate cleaning', 'move out clean', 'move out cleaning',
+    'move in clean', 'move in cleaning', 'moving out clean', 'lease clean',
+    'final clean', 'inspection clean', 'rental clean',
+    // deep / periodic
+    'deep clean', 'deep cleaning', 'spring clean', 'spring cleaning',
+    'one off clean', 'once off clean', 'regular clean', 'regular cleaning',
+    'weekly clean', 'weekly cleaning', 'fortnightly clean', 'fortnightly cleaning',
+    'monthly clean', 'monthly cleaning', 'ongoing clean', 'ongoing cleaning',
+    'general clean', 'general cleaning', 'detailed clean', 'full clean',
+    'top to bottom clean', 'declutter and clean',
+    // specialist surfaces
+    'carpet clean', 'carpet cleaning', 'carpet cleaner', 'steam clean',
+    'steam cleaning', 'upholstery clean', 'upholstery cleaning',
+    'lounge clean', 'couch clean', 'couch cleaning', 'sofa clean',
+    'sofa cleaning', 'mattress clean', 'mattress cleaning', 'rug cleaning',
+    'tile and grout', 'grout clean', 'grout cleaning', 'tile cleaning',
+    'floor clean', 'floor cleaning', 'polish floors',
+    'window clean', 'window cleaning', 'window cleaner', 'windows cleaned',
+    'blind clean', 'blind cleaning', 'blinds cleaned', 'curtain clean',
+    'curtain cleaning', 'curtains cleaned',
+    'oven clean', 'oven cleaning', 'oven cleaner', 'bbq clean', 'bbq cleaning',
+    'rangehood clean', 'range hood clean', 'fridge clean', 'fridge cleaning',
+    'bathroom clean', 'bathroom cleaning', 'shower clean', 'shower cleaning',
+    'kitchen clean', 'kitchen cleaning', 'toilet clean',
+    'wall wash', 'walls washed', 'skirting boards cleaned',
+    'ceiling fan clean', 'ceiling fans cleaned', 'light fittings cleaned',
+    'pressure clean', 'pressure cleaning', 'pressure wash', 'pressure washing',
+    'high pressure clean', 'high pressure cleaning', 'driveway clean',
+    'driveway cleaning', 'patio clean', 'balcony clean', 'garage clean',
+    'garage cleaning', 'solar panel clean', 'solar panel cleaning',
+    // property types / niches
+    'airbnb clean', 'airbnb cleaning', 'air bnb clean', 'air bnb cleaning',
+    'airbnb changeover', 'airbnb turnover', 'short stay clean',
+    'short stay cleaning', 'holiday let clean', 'holiday rental clean',
+    'office clean', 'office cleaning', 'commercial clean', 'commercial cleaning',
+    'strata clean', 'strata cleaning', 'body corporate cleaning',
+    'salon clean', 'gym clean', 'gym cleaning', 'cafe clean',
+    'childcare clean', 'childcare cleaning', 'school clean', 'school cleaning',
+    'medical centre cleaning', 'shop clean', 'warehouse clean',
+    'builders clean', 'builder clean', 'builders cleaning',
+    'post construction clean', 'construction clean', 'renovation clean',
+    'reno clean', 'after builders clean',
+    'ndis clean', 'ndis cleaning', 'ndis cleaner', 'ndis housekeeping',
+    'aged care clean', 'aged care cleaning', 'disability cleaning',
+    'hoarding clean', 'hoarder clean', 'deceased estate clean',
+    'estate clean', 'squalor clean',
+    'ironing service', 'laundry service', 'washing and ironing',
 ];
 
-const DISQUALIFIER_KEYWORDS = [
-    "i offer", "we offer", "my business", "our business", "my cleaning", "our cleaning",
-    "book now", "pm for quote", "dm for quote", "dm me", "pm me", "contact us on",
-    "call us at", "call/text", "special offer", "discount", "services offered",
-    "what we do", "fully insured cleaner", "reusable", "cloth", "vacuum cleaner for sale",
-    "selling", "for sale", "hiring cleaners", "cleaner position", "job opening", "car wash",
-    "car clean", "mobile detailing", "pool clean", "gutter", "lawn", "gardening", "landscaping",
-    "plumber", "electrician", "handyman", "painter", "removalist"
+/** Someone is ASKING for something (as opposed to advertising it). */
+const REQUEST_SIGNALS = [
+    'looking for', 'look for', 'looking to find', 'in search of', 'iso',
+    'need', 'needing', 'needed', 'i need', 'we need', 'in need of',
+    'want', 'wanting', 'wanted', 'i want', 'we want', 'would like',
+    'after a', 'after an', 'after some', 'chasing', 'keen for', 'keen to find',
+    'seeking', 'searching for', 'search for', 'require', 'requiring', 'required',
+    'recommend', 'recommendation', 'recommendations', 'recommendations for',
+    'suggestions', 'suggestion', 'any suggestions', 'anyone know',
+    'does anyone know', 'anyone recommend', 'can anyone recommend',
+    'does anyone have', 'anyone got', 'anyone available', 'who can',
+    'who does', 'know anyone', 'know of anyone', 'know someone',
+    'help with', 'need help', 'looking for help', 'assistance with',
+    'hire', 'hiring someone', 'book', 'booking', 'book in',
+    'quote', 'quotes', 'a quote', 'how much', 'price for', 'cost of',
+    'availability', 'available this', 'available next', 'asap',
+    'can someone', 'someone to', 'anyone to', 'point me',
+    'who is good', "who's good", 'whos good', 'who do you use', 'who do you recommend',
+    'who should i call', 'who should i use', 'anyone use', 'anyone used',
+    'used anyone', 'any good', 'best place for', 'worth using', 'thoughts on',
+    'is there anyone', 'is anyone', 'are there any', 'any decent', 'any reliable',
+];
+
+/** Unambiguous — approve on sight, no combination needed. */
+const STRONG_LEAD_PHRASES = [
+    'looking for a cleaner', 'looking for cleaner',
+    'looking for a house cleaner', 'looking for a domestic cleaner',
+    'looking for a bond cleaner', 'looking for a carpet cleaner',
+    'looking for a window cleaner', 'looking for a cleaning service',
+    'looking for a cleaning company', 'looking for someone to clean',
+    'looking for someone who cleans', 'looking for a reliable cleaner',
+    'looking for a good cleaner', 'looking for a regular cleaner',
+    'need a cleaner', 'need cleaner', 'need a house cleaner',
+    'need a bond cleaner', 'need a carpet cleaner', 'need a window cleaner',
+    'need someone to clean', 'need a cleaning service', 'need cleaning done',
+    'in need of a cleaner', 'in need of cleaning',
+    'cleaner needed', 'cleaner wanted',
+    'cleaning needed', 'cleaning wanted', 'cleaner required', 'cleaning required',
+    'want a cleaner', 'wanting a cleaner', 'after a cleaner', 'chasing a cleaner',
+    'seeking a cleaner', 'seeking cleaner', 'iso a cleaner', 'iso cleaner',
+    'recommend a cleaner', 'recommend a good cleaner', 'recommend a cleaning service',
+    'recommendations for a cleaner', 'recommendation for a cleaner',
+    'anyone recommend a cleaner', 'can anyone recommend a cleaner',
+    'anyone know a cleaner', 'anyone know a good cleaner',
+    'anyone know of a cleaner', 'does anyone know a cleaner',
+    'know a good cleaner', 'know any good cleaners', 'any good cleaners',
+    'anyone got a cleaner', 'does anyone have a cleaner',
+    'who does cleaning', 'who can clean', 'anyone who cleans',
+    'hire a cleaner', 'hiring a cleaner', 'book a cleaner', 'booking a cleaner',
+    'get my house cleaned', 'get the house cleaned', 'want my house cleaned',
+    'have my house cleaned', 'house needs a clean', 'house needs cleaning',
+    'place needs a clean', 'quote for cleaning', 'quote for a clean',
+    'cleaning quote', 'how much to clean', 'how much for a clean',
+    'help with cleaning', 'help with the cleaning', 'help cleaning my house',
+];
+
+/**
+ * Reject outright. Ordered roughly by how common the false positive is.
+ * Covers: competitors advertising, people seeking cleaning WORK, other trades,
+ * items for sale, and unrelated meanings of "clean".
+ */
+const HARD_DISQUALIFIERS = [
+    // ── competitors advertising their own service ──
+    'i offer', 'we offer', 'i provide', 'we provide', 'i specialise',
+    'we specialise', 'i specialize', 'we specialize',
+    'my business', 'our business', 'my cleaning business', 'our cleaning business',
+    'my company', 'our company',
+    'family run business', 'family owned business', 'locally owned and operated',
+    'book now', 'book today', 'book in now', 'bookings open', 'now taking bookings',
+    'taking on new clients', 'accepting new clients', 'new clients welcome',
+    'i have availability', 'we have availability',
+    'vacancies available',
+    'sale on now',
+    'services offered', 'services include', 'what we offer', 'what we do',
+    'services i offer', 'our services', 'my services', 'price list',
+    'follow my page', 'like my page', 'like our page', 'check out my page',
+    'check out our website', 'visit our website', 'link in bio',
+    'testimonial', 'testimonials',
+    // ── people looking for cleaning WORK / recruitment ──
+    'looking for work', 'looking for cleaning work', 'seeking work',
+    'seeking cleaning work', 'available for work', 'i am a cleaner',
+    'im a cleaner', 'i am a professional cleaner', 'experienced cleaner available',
+    'cleaner available', 'cleaners available', 'i clean houses',
+    'i do cleaning', 'we do cleaning', 'happy to clean',
+    'hiring cleaners', 'we are hiring', 'now hiring', 'join our team',
+    'cleaner position', 'cleaning position', 'job opening', 'job vacancy',
+    'position available', 'positions available', 'casual work',
+    'subcontractor', 'sub contractor', 'subcontract', 'resume', 'cv',
+    'work wanted', 'seeking employment',
+    // ── other trades / not our service ──
+    'car wash', 'car clean', 'car detailing', 'mobile detailing', 'auto detailing',
+    'pool clean', 'pool cleaning', 'pool service', 'gutter clean',
+    'gutter cleaning', 'roof clean', 'roof cleaning', 'lawn', 'lawn mowing',
+    'mowing', 'gardening', 'garden maintenance', 'landscaping', 'tree lopping',
+    'rubbish removal', 'junk removal', 'skip bin', 'plumber', 'plumbing',
+    'electrician', 'handyman', 'painter', 'painting quote', 'removalist',
+    'removalists', 'pest control', 'pest inspection', 'locksmith',
+    'dry cleaning', 'dry cleaner', 'laundromat',
+    // ── items for sale / product chat ──
+    'for sale', 'selling', 'sell my', 'brand new in box', 'pick up only',
+    'vacuum for sale', 'vacuum cleaner for sale', 'steam mop', 'robot vacuum',
+    'cleaning products', 'cleaning supplies', 'norwex', 'enjo',
+    'best product to clean', 'what product', 'which product',
+    'how do i clean', 'how do you clean', 'how to clean', 'any tips to clean',
+    'tips for cleaning', 'hack to clean', 'cleaning hack', 'cleaning hacks',
+    // ── unrelated senses of "clean" ──
+    'clean out my closet', 'cleaning out my closet', 'clean out my wardrobe',
+    'cleaning out the shed', 'clean eating', 'clean energy', 'clean water',
+    'teeth clean', 'dental clean', 'ear clean', 'clean driving record',
+    'clean skin', 'come clean', 'squeaky clean bill',
+
+    // ── recruitment: someone hiring cleaners for THEIR business (not a client) ──
+    'join her team', 'join my team', 'join the team', 'cleaner contractors',
+    'cleaning contractors', 'abn required',
+    'start asap for',
+    'send your resume', 'apply now', 'applications open',
+    'looking for cleaners to join', 'looking for experienced cleaners',
+    'wanting to join', 'work with us', 'employment opportunity',
+    // ── support work / childcare / other care roles ──
+    'support worker', 'support workers', 'personal care', 'disability support',
+    'carer', 'care worker', 'babysitting', 'baby sitting', 'babysitter',
+    'nanny', 'au pair', 'tutor', 'dog walking', 'pet sitting', 'house sitting',
+    // ── rentals & real estate ──
+    'room to rent', 'room for rent', 'rooms for rent', 'looking for a room',
+    'looking for a rental', 'long term rental', 'rental application',
+    'house to rent', 'for rent', 'tenants', 'tenant', 'rental property available',
+    'price reduction', 'offers over', 'open home', 'inspection times',
+    'just listed', 'under contract', 'auction', 'for lease',
+    // ── "cleaning out" / decluttering, not a cleaning job ──
+    'cleaning out your', 'clean out your', 'cleaning out the garage',
+    'cleaning out my', 'clean out my', 'having a clear out', 'garage sale',
+    // ── marketing / content posts from cleaning businesses ──
+    'book your', 'get booked', 'giveaway', 'bond back', 'bond back guarantee',
+    'let us', 'we bring', 'our professional', 'deserve more than',
+    'for your business', 'grow your business', 'eco friendly and vegan',
+    'transformation', 'before and after', 'swipe to see', 'tag someone',
+    'clean hotel',
+    // ── B2B software / marketing aimed at cleaning businesses ──
+    'xero', 'crm', 'software', 'platform', 'dashboard', 'invoices',
+    'invoicing', 'your bookings', 'client books', 'vendors', 'restock',
+    'keeps your whole', 'admin', 'subscription', 'leads for your',
+    'more clients', 'win more', 'scale your',
+    // ── someone answering, not asking ──
+    'i highly recommend', 'can highly recommend', 'highly recommend',
+    'i recommend', 'we recommend', 'shout out to', 'big thanks to',
+    'thanks to', 'thank you to', 'just used', 'just had', 'did a great job',
+    'amazing job', 'so happy with',
+];
+
+/**
+ * Soft signals: typical of an advertiser, but a genuine client post can also
+ * contain them ("PM me", "must have ABN"). Only reject on these when the post
+ * does NOT also contain an unambiguous request for a cleaner.
+ */
+const SOFT_DISQUALIFIERS = [
+    'my team', 'our team', 'spots available', 'spaces available',
+    'availability this week', 'availability next week', 'openings available', 'pm for a quote',
+    'pm for quote', 'dm for a quote', 'dm for quote', 'pm me for',
+    'dm me for', 'message me for', 'inbox me for', 'pm me',
+    'dm me', 'inbox me', 'contact us', 'call us',
+    'call me on', 'text me on', 'give us a call', 'get in touch',
+    'reach out to us', 'free quote', 'free quotes', 'no obligation quote',
+    'competitive rates', 'competitive pricing', 'affordable rates', 'reasonable rates',
+    'best rates', 'special offer', 'discount', 'promo',
+    'promotion', 'fully insured', 'police checked', 'abn',
+    'public liability', 'satisfaction guaranteed', 'happiness guarantee', 'reviews welcome',
+    'own car', 'own transport', 'own abn', 'good pay',
+    'great pay', 'hourly rate', 'per hour', 'paid weekly',
+    'immediate start', 'must have experience', 'experience preferred',
+];
+
+/**
+ * Interstate / far-away locations. Fiesta Fresh services the Gold Coast, so a
+ * post that names another state's city is not a servicable lead even if the
+ * wording is a perfect match.
+ */
+const GEO_EXCLUDE = [
+    'adelaide', 'melbourne', 'sydney', 'perth', 'hobart', 'darwin', 'canberra',
+    'geelong', 'ballarat', 'bendigo', 'newcastle', 'wollongong', 'launceston',
+    'townsville', 'cairns', 'mackay', 'rockhampton', 'toowoomba', 'bundaberg',
+    'victoria', 'new south wales', 'nsw', 'south australia', 'western australia',
+    'tasmania', 'northern territory', 'mambourin', 'new zealand', 'auckland',
 ];
 
 /**
@@ -492,31 +748,62 @@ async function extractCommenterName(postElement: any): Promise<string> {
 }
 
 /**
- * High-Precision Zero-API Keyword Engine
+ * High-precision zero-API classifier.
+ * Returns 'approve' (comment), 'reject' (ignore), or 'unsure' (LLM if available).
  */
 function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
-    const lowerText = postText.toLowerCase();
-    
-    // 1. Check Disqualifiers (Reject immediately)
-    for (const keyword of DISQUALIFIER_KEYWORDS) {
-        if (lowerText.includes(keyword.toLowerCase())) {
-            console.log(`❌ Disqualified - matched reject keyword: "${keyword}"`);
-            return 'reject';
-        }
+    const text = normalizeForMatch(postText);
+    if (!text || text.length < 12) return 'reject';
+
+    // 1. Disqualifiers win — competitor ads and job posts look superficially
+    //    identical to leads, so they are checked before anything else.
+    const bad = firstMatch(text, HARD_DISQUALIFIERS);
+    if (bad) {
+        console.log(`❌ Rejected — disqualifier: "${bad}"`);
+        return 'reject';
     }
 
-    // 2. Check Lead Intent Keywords (Approve immediately - 0 API cost!)
-    for (const keyword of INTENT_LEAD_KEYWORDS) {
-        if (lowerText.includes(keyword.toLowerCase())) {
-            console.log(`🎯 HIGH ACCURACY LEAD MATCH - matched lead keyword: "${keyword}"`);
-            return 'approve';
-        }
+    // 1b. Servicing area — reject leads that name another state/region.
+    const faraway = firstMatch(text, GEO_EXCLUDE);
+    if (faraway) {
+        console.log(`❌ Rejected — outside service area: "${faraway}"`);
+        return 'reject';
     }
-    
-    // 3. Fallback: If post mentions 'clean' or 'cleaner', evaluate via local Semantic AI
-    if (lowerText.includes('clean')) {
-        console.log("🤔 Post mentions clean/cleaner - evaluating via local Semantic AI...");
-        return 'unsure';
+
+    // 2. Unambiguous request for a cleaner.
+    const strong = firstMatch(text, STRONG_LEAD_PHRASES);
+    if (strong) {
+        console.log(`🎯 LEAD (strong phrase): "${strong}"`);
+        return 'approve';
+    }
+
+    // 2b. Advertiser-ish signals only disqualify when there was no clear request
+    //     above — real clients do write "PM me" and "must have an ABN".
+    const soft = firstMatch(text, SOFT_DISQUALIFIERS);
+    if (soft) {
+        console.log(`❌ Rejected — advertiser signal: "${soft}"`);
+        return 'reject';
+    }
+
+    // 3. Service word + request signal = lead. This is what catches the long
+    //    tail: "any recommendations for carpet cleaning", "after an oven clean",
+    //    "how much for a bond clean", "ISO end of lease cleaning".
+    const service = firstMatch(text, SERVICE_KEYWORDS);
+    const ask = firstMatch(text, REQUEST_SIGNALS);
+    if (service && ask) {
+        console.log(`🎯 LEAD (service "${service}" + request "${ask}")`);
+        return 'approve';
+    }
+
+    // 4. Cleaning is mentioned but nobody is obviously asking — defer to the LLM
+    //    when a key is configured, otherwise stay silent rather than guess.
+    if (service) {
+        if (process.env.GEMINI_API_KEY) {
+            console.log(`🤔 Mentions "${service}" with no clear request — sending to Gemini...`);
+            return 'unsure';
+        }
+        console.log(`➖ Mentions "${service}" but no request signal and no GEMINI_API_KEY — skipping.`);
+        return 'reject';
     }
 
     return 'reject';
