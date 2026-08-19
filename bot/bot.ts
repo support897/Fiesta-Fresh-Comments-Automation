@@ -402,65 +402,111 @@ function firstMatch(haystack: string, phrases: string[]): string | null {
     return null;
 }
 
-/** Cleaning services Fiesta Fresh actually sells. */
-const SERVICE_KEYWORDS = [
-    // core
-    'cleaner', 'cleaners', 'cleaning', 'clean', 'cleans', 'cleaned',
-    'house cleaner', 'house cleaning', 'home cleaner', 'home cleaning',
-    'domestic cleaner', 'domestic cleaning', 'housekeeper', 'housekeeping',
-    'house keeper', 'home help', 'cleaning lady', 'cleaning service',
-    'cleaning services', 'cleaning company', 'cleaning business',
-    // end of lease / moving
-    'bond clean', 'bond cleaning', 'bond cleaner', 'end of lease clean',
-    'end of lease cleaning', 'end of lease cleaner', 'exit clean', 'exit cleaning',
-    'vacate clean', 'vacate cleaning', 'move out clean', 'move out cleaning',
-    'move in clean', 'move in cleaning', 'moving out clean', 'lease clean',
-    'final clean', 'inspection clean', 'rental clean',
-    // deep / periodic
+/**
+ * The four service lines Fiesta Fresh actually sells:
+ *   BOND (end of lease) · HOME (residential) · CARPET (soft furnishings) · COMMERCIAL
+ * Anything outside these (windows-only, gutters, pressure washing, solar panels,
+ * oven-only, blinds) is deliberately NOT here — those generate leads the business
+ * cannot service.
+ */
+const SERVICE_BOND = [
+    'bond clean', 'bond cleans', 'bond cleaning', 'bond cleaner', 'bond cleaners',
+    'bond back clean', 'end of lease clean', 'end of lease cleaning',
+    'end of lease cleaner', 'end of lease', 'eol clean', 'exit clean',
+    'exit cleaning', 'exit cleaner', 'vacate clean', 'vacate cleaning',
+    'move out clean', 'move out cleaning', 'moving out clean', 'move in clean',
+    'move in cleaning', 'lease clean', 'lease cleaning', 'final clean',
+    'inspection clean', 'rental clean', 'rental cleaning', 'tenancy clean',
+    'end of tenancy clean', 'handover clean', 'pre inspection clean',
+];
+
+const SERVICE_HOME = [
+    'house clean', 'house cleans', 'house cleaner', 'house cleaning',
+    'home clean', 'home cleaner', 'home cleaning', 'domestic clean',
+    'domestic cleaner', 'domestic cleaning', 'residential clean',
+    'residential cleaner', 'residential cleaning', 'housekeeper', 'housekeeping',
+    'house keeper', 'cleaning lady', 'cleaner', 'cleaners', 'cleaning',
+    'cleaning service', 'cleaning services', 'cleaning company',
     'deep clean', 'deep cleaning', 'spring clean', 'spring cleaning',
     'one off clean', 'once off clean', 'regular clean', 'regular cleaning',
     'weekly clean', 'weekly cleaning', 'fortnightly clean', 'fortnightly cleaning',
     'monthly clean', 'monthly cleaning', 'ongoing clean', 'ongoing cleaning',
     'general clean', 'general cleaning', 'detailed clean', 'full clean',
-    'top to bottom clean', 'declutter and clean',
-    // specialist surfaces
-    'carpet clean', 'carpet cleaning', 'carpet cleaner', 'steam clean',
-    'steam cleaning', 'upholstery clean', 'upholstery cleaning',
-    'lounge clean', 'couch clean', 'couch cleaning', 'sofa clean',
-    'sofa cleaning', 'mattress clean', 'mattress cleaning', 'rug cleaning',
-    'tile and grout', 'grout clean', 'grout cleaning', 'tile cleaning',
-    'floor clean', 'floor cleaning', 'polish floors',
-    'window clean', 'window cleaning', 'window cleaner', 'windows cleaned',
-    'blind clean', 'blind cleaning', 'blinds cleaned', 'curtain clean',
-    'curtain cleaning', 'curtains cleaned',
-    'oven clean', 'oven cleaning', 'oven cleaner', 'bbq clean', 'bbq cleaning',
-    'rangehood clean', 'range hood clean', 'fridge clean', 'fridge cleaning',
-    'bathroom clean', 'bathroom cleaning', 'shower clean', 'shower cleaning',
-    'kitchen clean', 'kitchen cleaning', 'toilet clean',
-    'wall wash', 'walls washed', 'skirting boards cleaned',
-    'ceiling fan clean', 'ceiling fans cleaned', 'light fittings cleaned',
-    'pressure clean', 'pressure cleaning', 'pressure wash', 'pressure washing',
-    'high pressure clean', 'high pressure cleaning', 'driveway clean',
-    'driveway cleaning', 'patio clean', 'balcony clean', 'garage clean',
-    'garage cleaning', 'solar panel clean', 'solar panel cleaning',
-    // property types / niches
+    'top to bottom clean', 'apartment clean', 'unit clean', 'townhouse clean',
     'airbnb clean', 'airbnb cleaning', 'air bnb clean', 'air bnb cleaning',
     'airbnb changeover', 'airbnb turnover', 'short stay clean',
     'short stay cleaning', 'holiday let clean', 'holiday rental clean',
-    'office clean', 'office cleaning', 'commercial clean', 'commercial cleaning',
-    'strata clean', 'strata cleaning', 'body corporate cleaning',
-    'salon clean', 'gym clean', 'gym cleaning', 'cafe clean',
-    'childcare clean', 'childcare cleaning', 'school clean', 'school cleaning',
-    'medical centre cleaning', 'shop clean', 'warehouse clean',
-    'builders clean', 'builder clean', 'builders cleaning',
-    'post construction clean', 'construction clean', 'renovation clean',
-    'reno clean', 'after builders clean',
     'ndis clean', 'ndis cleaning', 'ndis cleaner', 'ndis housekeeping',
     'aged care clean', 'aged care cleaning', 'disability cleaning',
-    'hoarding clean', 'hoarder clean', 'deceased estate clean',
-    'estate clean', 'squalor clean',
-    'ironing service', 'laundry service', 'washing and ironing',
+    'hoarding clean', 'hoarder clean', 'deceased estate clean', 'squalor clean',
 ];
+
+const SERVICE_CARPET = [
+    'carpet clean', 'carpet cleans', 'carpet cleaning', 'carpet cleaner',
+    'carpet steam clean', 'carpet shampoo', 'steam clean', 'steam cleaning',
+    'upholstery clean', 'upholstery cleaning', 'lounge clean', 'couch clean',
+    'couch cleaning', 'sofa clean', 'sofa cleaning', 'mattress clean',
+    'mattress cleaning', 'rug clean', 'rug cleaning', 'stain removal',
+];
+
+const SERVICE_COMMERCIAL = [
+    'office clean', 'office cleaning', 'office cleaner', 'commercial clean',
+    'commercial cleaning', 'commercial cleaner', 'strata clean',
+    'strata cleaning', 'body corporate cleaning', 'shop clean', 'shop cleaning',
+    'cafe clean', 'cafe cleaning', 'restaurant clean', 'restaurant cleaning',
+    'salon clean', 'gym clean', 'gym cleaning', 'warehouse clean',
+    'warehouse cleaning', 'childcare clean', 'childcare cleaning',
+    'school clean', 'school cleaning', 'medical centre cleaning',
+    'clinic cleaning', 'builders clean', 'builder clean', 'builders cleaning',
+    'post construction clean', 'construction clean', 'renovation clean',
+    'reno clean', 'after builders clean', 'site clean', 'workplace cleaning',
+];
+
+/**
+ * Jobs people ask about that Fiesta Fresh does NOT sell. A post is dropped when
+ * it only mentions one of these and no in-scope service (so "bond clean incl.
+ * windows" still qualifies, but "need my windows done" does not).
+ */
+const OUT_OF_SCOPE = [
+    'window clean', 'window cleaning', 'window cleaner', 'windows cleaned',
+    'window washing', 'gutter clean', 'gutter cleaning', 'roof clean',
+    'roof cleaning', 'pressure clean', 'pressure cleaning', 'pressure wash',
+    'pressure washing', 'high pressure clean', 'driveway clean',
+    'driveway cleaning', 'solar panel clean', 'solar panel cleaning',
+    'oven clean', 'oven cleaning', 'oven cleaner', 'bbq clean', 'bbq cleaning',
+    'blind clean', 'blind cleaning', 'blinds cleaned', 'curtain clean',
+    'curtain cleaning', 'curtains cleaned', 'tile and grout', 'grout clean',
+    'grout cleaning', 'pool clean', 'pool cleaning', 'car clean', 'car detailing',
+    'ironing service', 'laundry service',
+];
+
+/** In-scope service words that are specific (excludes the generic "cleaner"/"cleaning"). */
+const SERVICE_SPECIFIC: string[] = [];
+
+/** All service lines, with the line recorded for logging/reporting. */
+const SERVICE_LINES: Array<{ line: string; words: string[] }> = [
+    { line: 'BOND', words: SERVICE_BOND },
+    { line: 'CARPET', words: SERVICE_CARPET },
+    { line: 'COMMERCIAL', words: SERVICE_COMMERCIAL },
+    { line: 'HOME', words: SERVICE_HOME },
+];
+
+const SERVICE_KEYWORDS: string[] = SERVICE_LINES.flatMap(s => s.words);
+
+const GENERIC_SERVICE_WORDS = new Set([
+    'cleaner', 'cleaners', 'cleaning', 'cleaning service', 'cleaning services',
+    'cleaning company', 'cleaning lady',
+]);
+SERVICE_SPECIFIC.push(...SERVICE_KEYWORDS.filter(w => !GENERIC_SERVICE_WORDS.has(w)));
+
+/** Which service line a post belongs to (most specific first). */
+function detectServiceLine(text: string): { line: string; word: string } | null {
+    for (const { line, words } of SERVICE_LINES) {
+        const w = firstMatch(text, words);
+        if (w) return { line, word: w };
+    }
+    return null;
+}
 
 /** Someone is ASKING for something (as opposed to advertising it). */
 const REQUEST_SIGNALS = [
@@ -770,6 +816,14 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
         return 'reject';
     }
 
+    // 1c. Out-of-scope trades (windows only, gutters, pressure washing, ovens…)
+    //     — dropped unless an in-scope service is also named.
+    const oos = firstMatch(text, OUT_OF_SCOPE);
+    if (oos && !firstMatch(text, SERVICE_SPECIFIC)) {
+        console.log(`❌ Rejected — out of scope service: "${oos}"`);
+        return 'reject';
+    }
+
     // 2. Unambiguous request for a cleaner.
     const strong = firstMatch(text, STRONG_LEAD_PHRASES);
     if (strong) {
@@ -788,21 +842,21 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
     // 3. Service word + request signal = lead. This is what catches the long
     //    tail: "any recommendations for carpet cleaning", "after an oven clean",
     //    "how much for a bond clean", "ISO end of lease cleaning".
-    const service = firstMatch(text, SERVICE_KEYWORDS);
+    const svc = detectServiceLine(text);
     const ask = firstMatch(text, REQUEST_SIGNALS);
-    if (service && ask) {
-        console.log(`🎯 LEAD (service "${service}" + request "${ask}")`);
+    if (svc && ask) {
+        console.log(`🎯 LEAD [${svc.line}] (service "${svc.word}" + request "${ask}")`);
         return 'approve';
     }
 
     // 4. Cleaning is mentioned but nobody is obviously asking — defer to the LLM
     //    when a key is configured, otherwise stay silent rather than guess.
-    if (service) {
+    if (svc) {
         if (process.env.GEMINI_API_KEY) {
-            console.log(`🤔 Mentions "${service}" with no clear request — sending to Gemini...`);
+            console.log(`🤔 Mentions ${svc.line} service "${svc.word}" with no clear request — sending to Gemini...`);
             return 'unsure';
         }
-        console.log(`➖ Mentions "${service}" but no request signal and no GEMINI_API_KEY — skipping.`);
+        console.log(`➖ Mentions "${svc.word}" but no request signal and no GEMINI_API_KEY — skipping.`);
         return 'reject';
     }
 
