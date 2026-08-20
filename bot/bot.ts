@@ -1229,6 +1229,131 @@ async function patrolGroups(page: any) {
     console.log("\u2705 PHASE 2 patrol complete.");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 3 — SEARCH PATROL
+//
+// Notifications and feed scrolling only ever surface whatever Facebook decides
+// to show. That is why bond-clean requests were being missed almost entirely:
+// the feed was full of competitor ads while real "need a bond clean" posts
+// scrolled past unseen. This phase searches each group directly for the four
+// service lines, which is the only reliable way to find people asking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Search terms rotated through group search, grouped by service line. */
+const SEARCH_TERMS: string[] = [
+    'bond clean',
+    'end of lease clean',
+    'vacate clean',
+    'carpet cleaning',
+    'house cleaner',
+    'cleaner recommendation',
+    'office cleaning',
+    'looking for a cleaner',
+];
+
+let searchCursor = 0;
+const searchCursorFile = path.join(__dirname, '.search_cursor');
+try { searchCursor = parseInt(fs.readFileSync(searchCursorFile, 'utf8')) || 0; } catch { /* first run */ }
+
+/**
+ * Reject search hits that are obviously old. Facebook renders a relative
+ * timestamp in the post header ("3 d", "12 w", "2 y"); anything older than
+ * ~8 weeks is a stale request that has long since been filled.
+ */
+function looksTooOld(articleText: string): boolean {
+    const head = articleText.slice(0, 220);
+    if (/\b(\d+)\s*y\b/i.test(head)) return true;
+    const weeks = head.match(/\b(\d+)\s*w\b/i);
+    if (weeks && parseInt(weeks[1] ?? '0') > 8) return true;
+    const months = head.match(/\b(\d+)\s*(mo|months?)\b/i);
+    if (months && parseInt(months[1] ?? '0') >= 3) return true;
+    return false;
+}
+
+async function searchGroupsForLeads(page: any) {
+    const groupsPerCycle = parseInt(process.env.SEARCH_GROUPS_PER_CYCLE || '5');
+    const termsPerCycle = parseInt(process.env.SEARCH_TERMS_PER_CYCLE || '3');
+    if (groupsPerCycle <= 0 || termsPerCycle <= 0) {
+        console.log("\u23ed\ufe0f Search patrol disabled.");
+        return;
+    }
+
+    let groups: string[] = [];
+    try {
+        const { data } = await supabase.from('groups').select('url, is_active');
+        groups = (data || []).filter((g: any) => g.is_active !== false).map((g: any) => g.url).filter(Boolean);
+    } catch (e: any) {
+        console.error("\u26a0\ufe0f Could not load groups for search:", e.message);
+    }
+    if (groups.length === 0) { console.log("\u26a0\ufe0f No groups to search."); return; }
+
+    // Rotate through groups and terms so every combination is covered over time.
+    const groupSlice: string[] = [];
+    for (let i = 0; i < Math.min(groupsPerCycle, groups.length); i++) {
+        groupSlice.push(groups[(searchCursor + i) % groups.length]!);
+    }
+    const termSlice: string[] = [];
+    const termOffset = Math.floor(searchCursor / Math.max(groups.length, 1)) % SEARCH_TERMS.length;
+    for (let i = 0; i < Math.min(termsPerCycle, SEARCH_TERMS.length); i++) {
+        termSlice.push(SEARCH_TERMS[(termOffset + i) % SEARCH_TERMS.length]!);
+    }
+    searchCursor = (searchCursor + groupSlice.length) % (groups.length * SEARCH_TERMS.length || 1);
+    try { fs.writeFileSync(searchCursorFile, String(searchCursor), 'utf8'); } catch { /* ignore */ }
+
+    console.log(`\ud83d\udd0e PHASE 3: Searching ${groupSlice.length} groups for [${termSlice.join(', ')}]...`);
+
+    const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
+    const seen = new Set((postedReplies || []).map((r: any) => String(r.post_id)));
+    const { data: knownLeads } = await supabase.from('leads').select('post_id');
+    for (const l of knownLeads || []) seen.add(String(l.post_id));
+
+    let found = 0;
+    for (const groupUrl of groupSlice) {
+        const base = (groupUrl.split('?')[0] ?? groupUrl).replace(/\/$/, '');
+        for (const term of termSlice) {
+            const searchUrl = `${base}/search/?q=${encodeURIComponent(term)}`;
+            try {
+                await page.goto(searchUrl, { waitUntil: 'commit', timeout: 45000 });
+                await randomDelay(3000, 6000);
+                await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
+
+                const posts = page.locator('[role="article"]');
+                const count = Math.min(await posts.count().catch(() => 0), 15);
+                for (let i = 0; i < count; i++) {
+                    const el = posts.nth(i);
+                    const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+                    if (!text || text.length < 25) continue;
+                    if (looksTooOld(text)) continue;
+
+                    const decision = quickKeywordFilter(text);
+                    let isLead = decision === 'approve';
+                    if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
+                    if (!isLead) continue;
+
+                    let postId = await extractFacebookPostId(el);
+                    if (!postId) postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
+                    if (seen.has(String(postId))) continue;
+                    seen.add(String(postId));
+
+                    found++;
+                    console.log(`\ud83c\udfaf SEARCH LEAD "${term}" \u2192 ${postId}`);
+                    const { error } = await supabase.from('leads').insert({
+                        post_id: postId,
+                        group_url: groupUrl,
+                        post_text: text.slice(0, 4000),
+                        status: 'approved',
+                    });
+                    if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
+                }
+            } catch (e: any) {
+                console.error(`\u26a0\ufe0f Search error (${term}): ${e.message?.slice(0, 90)}`);
+            }
+            await randomDelay(5000, 11000); // pace searches — this is the risky surface
+        }
+    }
+    console.log(`\u2705 PHASE 3 search complete — ${found} new lead(s).`);
+}
+
 async function runBot(account: FbAccount): Promise<boolean> {
     console.log("🤖 Starting Fiesta Fresh Automation Bot...");
     console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
@@ -1845,6 +1970,7 @@ We will also send you a DM just in case you have any questions. Make sure to che
 
         // PHASE 2: Patrol the configured target groups directly
         await patrolGroups(page);
+        await searchGroupsForLeads(page);
 
     } catch (e) {
         console.error("💥 Error:", e);
