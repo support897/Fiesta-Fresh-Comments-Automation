@@ -1307,6 +1307,16 @@ async function resolveGroupUrl(page: any, url: string): Promise<string | null> {
     return resolved;
 }
 
+/** Cheap mid-cycle check — Facebook drops you to /login the moment a session dies. */
+async function sessionStillAlive(page: any): Promise<boolean> {
+    const u = String(page.url());
+    if (/\/login\b|login\.php|\/checkpoint\//.test(u)) {
+        console.error("\ud83d\udea8 Session died mid-cycle (redirected to login) — aborting this phase.");
+        return false;
+    }
+    return true;
+}
+
 async function searchGroupsForLeads(page: any) {
     const groupsPerCycle = parseInt(process.env.SEARCH_GROUPS_PER_CYCLE || '5');
     const termsPerCycle = parseInt(process.env.SEARCH_TERMS_PER_CYCLE || '3');
@@ -1353,6 +1363,7 @@ async function searchGroupsForLeads(page: any) {
             try {
                 await page.goto(searchUrl, { waitUntil: 'commit', timeout: 45000 });
                 await randomDelay(3000, 6000);
+                if (!await sessionStillAlive(page)) return;
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
 
                 const posts = page.locator('[role="article"]');
@@ -1562,11 +1573,20 @@ async function runBot(account: FbAccount): Promise<boolean> {
         const currentUrl = page.url();
         const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
         const checkpointVisible = await isSessionCheckpoint(page);
-        let isLogged = !loginFormVisible
+        // POSITIVE proof of a session: Facebook only sets c_user for a logged-in
+        // user. The old check was negative-only and matched 'login.php', but
+        // Facebook redirects logged-out users to '/login/?next=...' — so a dead
+        // session reported "Login verified" and the bot spent every cycle
+        // scrolling login pages.
+        const liveCookies = await context.cookies().catch(() => [] as any[]);
+        const hasCUser = liveCookies.some((c: any) => c.name === 'c_user' && c.value);
+        let isLogged = hasCUser
+            && !loginFormVisible
             && !checkpointVisible
-            && !currentUrl.includes('login.php')
+            && !/\/login\b|login\.php|\/checkpoint\//.test(currentUrl)
             && !currentUrl.includes('two_step_verification')
             && !currentUrl.includes('recaptcha');
+        if (!hasCUser) console.error("\u274c No c_user cookie present — the saved session is dead.");
 
         if (!isLogged) {
             console.log(`🔒 Cookie verification failed for ${fbEmail}.`);
