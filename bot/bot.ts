@@ -1270,6 +1270,31 @@ function looksTooOld(articleText: string): boolean {
     return false;
 }
 
+/**
+ * ~1 in 5 saved groups is a facebook.com/share/g/XXXX link. Those redirect fine
+ * in a browser but have no /search/ endpoint, so appending one returns
+ * "Not Found". Resolve them to the canonical /groups/<id> form once and cache.
+ */
+const canonicalGroupCache = new Map<string, string | null>();
+
+async function resolveGroupUrl(page: any, url: string): Promise<string | null> {
+    const base = (url.split('?')[0] ?? url).replace(/\/$/, '');
+    if (/\/groups\/[^/]+$/.test(base)) return base;
+    if (canonicalGroupCache.has(base)) return canonicalGroupCache.get(base) ?? null;
+
+    let resolved: string | null = null;
+    try {
+        await page.goto(base, { waitUntil: 'commit', timeout: 45000 });
+        await randomDelay(2500, 4500);
+        const m = String(page.url()).match(/facebook\.com\/groups\/([^/?#]+)/);
+        if (m) resolved = `https://www.facebook.com/groups/${m[1]}`;
+    } catch { /* leave unresolved */ }
+
+    canonicalGroupCache.set(base, resolved);
+    if (!resolved) console.log(`   \u26a0\ufe0f Could not resolve share link to a group id: ${base.slice(-30)}`);
+    return resolved;
+}
+
 async function searchGroupsForLeads(page: any) {
     const groupsPerCycle = parseInt(process.env.SEARCH_GROUPS_PER_CYCLE || '5');
     const termsPerCycle = parseInt(process.env.SEARCH_TERMS_PER_CYCLE || '3');
@@ -1309,7 +1334,8 @@ async function searchGroupsForLeads(page: any) {
 
     let found = 0;
     for (const groupUrl of groupSlice) {
-        const base = (groupUrl.split('?')[0] ?? groupUrl).replace(/\/$/, '');
+        const base = await resolveGroupUrl(page, groupUrl);
+        if (!base) continue;
         for (const term of termSlice) {
             const searchUrl = `${base}/search/?q=${encodeURIComponent(term)}`;
             try {
@@ -1318,7 +1344,9 @@ async function searchGroupsForLeads(page: any) {
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
 
                 const posts = page.locator('[role="article"]');
-                const count = Math.min(await posts.count().catch(() => 0), 15);
+                const total = await posts.count().catch(() => 0);
+                const count = Math.min(total, 15);
+                console.log(`   \u2022 "${term}" \u2192 ${total} result(s)`);
                 for (let i = 0; i < count; i++) {
                     const el = posts.nth(i);
                     const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
