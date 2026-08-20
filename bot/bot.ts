@@ -1284,10 +1284,22 @@ async function resolveGroupUrl(page: any, url: string): Promise<string | null> {
 
     let resolved: string | null = null;
     try {
-        await page.goto(base, { waitUntil: 'commit', timeout: 45000 });
-        await randomDelay(2500, 4500);
-        const m = String(page.url()).match(/facebook\.com\/groups\/([^/?#]+)/);
-        if (m) resolved = `https://www.facebook.com/groups/${m[1]}`;
+        await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        // Share links bounce through a client-side redirect, so the URL right
+        // after load is still /share/g/... — wait for the real one to appear.
+        await page.waitForURL(/facebook\.com\/groups\//, { timeout: 20000 }).catch(() => {});
+        let m = String(page.url()).match(/facebook\.com\/groups\/([^/?#]+)/);
+        if (!m) {
+            // Fallback: the canonical group id is in og:url / canonical link.
+            const href = await page.evaluate(() => {
+                const meta = document.querySelector('meta[property="og:url"]') as HTMLMetaElement | null;
+                const canon = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+                const anchor = document.querySelector('a[href*="/groups/"]') as HTMLAnchorElement | null;
+                return meta?.content || canon?.href || anchor?.href || '';
+            }).catch(() => '');
+            m = String(href).match(/facebook\.com\/groups\/([^/?#]+)/);
+        }
+        if (m && m[1] && m[1] !== 'feed') resolved = `https://www.facebook.com/groups/${m[1]}`;
     } catch { /* leave unresolved */ }
 
     canonicalGroupCache.set(base, resolved);
