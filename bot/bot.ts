@@ -1652,8 +1652,19 @@ async function runBot(account: FbAccount): Promise<boolean> {
             const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
             if (isAlreadyReplied) {
                 console.log(`⏭️ Lead ${lead.post_id} already has a logged reply in replies_log. Skipping execution.`);
+                return false;
             }
-            return !isAlreadyReplied;
+            // Re-validate against the CURRENT classifier before commenting. The
+            // anon key cannot UPDATE leads (RLS is insert/select only), so old
+            // rows keep whatever status they were given by an older, looser
+            // filter — including competitor ads and recruitment posts. Without
+            // this guard the bot would comment on all of them.
+            const verdict = quickKeywordFilter(lead.post_text || '');
+            if (verdict !== 'approve') {
+                console.log(`🛑 Lead ${lead.post_id} no longer passes the filter (${verdict}) — skipping stale approval.`);
+                return false;
+            }
+            return true;
         });
 
         const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
