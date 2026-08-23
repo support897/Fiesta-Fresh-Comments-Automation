@@ -954,17 +954,29 @@ Post text to evaluate:
  * PROXY_SERVER=socks5://127.0.0.1:1080) is the only reliable fix, so EVERY
  * browser the bot opens must go through it — including the account-3 booster.
  */
-function resolveProxy(): { server: string } | null {
+function resolveProxy(): { server: string; username?: string | undefined; password?: string | undefined } | null {
     const proxyServer = process.env.PROXY_SERVER;
     if (!proxyServer) return null;
-    const proxyUser = process.env.PROXY_USERNAME;
-    const proxyPass = process.env.PROXY_PASSWORD;
-    let proxyUrl = proxyServer;
-    if (proxyUser && proxyPass && !proxyUrl.includes('@')) {
-        const [scheme, rest] = proxyUrl.split('://');
-        proxyUrl = `${scheme}://${encodeURIComponent(proxyUser)}:${encodeURIComponent(proxyPass)}@${rest}`;
+    let server = proxyServer;
+    let username = process.env.PROXY_USERNAME;
+    let password = process.env.PROXY_PASSWORD;
+    // Chromium refuses credentials embedded in the proxy URL (ERR_INVALID_AUTH_CREDENTIALS),
+    // so always hand Playwright a bare server plus separate username/password fields.
+    if (server.includes('@')) {
+        const [scheme, rest] = server.split('://');
+        const at = rest.lastIndexOf('@');
+        const creds = rest.slice(0, at);
+        const host = rest.slice(at + 1);
+        const sep = creds.indexOf(':');
+        if (!username) username = decodeURIComponent(sep === -1 ? creds : creds.slice(0, sep));
+        if (!password && sep !== -1) password = decodeURIComponent(creds.slice(sep + 1));
+        server = `${scheme}://${host}`;
     }
-    return { server: proxyUrl };
+    return {
+        server,
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
+    };
 }
 
 async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
@@ -1001,7 +1013,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         }
 
         const boosterProxy = resolveProxy();
-        if (boosterProxy) console.log(`🌐 Booster using proxy: ${boosterProxy.server}`);
+        if (boosterProxy) console.log(`🌐 Booster using proxy: ${boosterProxy.server} (user ${boosterProxy.username ?? "none"})`);
         else console.warn("⚠️ Booster running WITHOUT a proxy — Facebook usually strips datacenter sessions.");
         const boosterBrowser = await chromium.launch({
             headless: true,
@@ -1490,7 +1502,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
     const mainProxy = resolveProxy();
     if (mainProxy) {
-        console.log(`🌐 Using Proxy: ${mainProxy.server}`);
+        console.log(`🌐 Using Proxy: ${mainProxy.server} (user ${mainProxy.username ?? "none"})`);
         contextOptions.proxy = mainProxy;
     } else {
         console.warn("⚠️ No PROXY_SERVER set. Facebook strips sessions loaded from this datacenter IP — set a residential proxy or open a reverse SSH tunnel (ssh -N -R 1080 deploy@159.13.36.205) and use socks5://127.0.0.1:1080.");
