@@ -946,6 +946,27 @@ Post text to evaluate:
     }
 }
 
+/**
+ * Facebook rejects sessions coming from datacenter IPs (the Oracle VPS): the
+ * c_user/xs cookies get stripped on the first page load and password logins are
+ * bounced to a broken two-step page. A residential proxy (or a reverse SSH
+ * tunnel from a home machine: `ssh -N -R 1080 deploy@<vps>` then
+ * PROXY_SERVER=socks5://127.0.0.1:1080) is the only reliable fix, so EVERY
+ * browser the bot opens must go through it — including the account-3 booster.
+ */
+function resolveProxy(): { server: string } | null {
+    const proxyServer = process.env.PROXY_SERVER;
+    if (!proxyServer) return null;
+    const proxyUser = process.env.PROXY_USERNAME;
+    const proxyPass = process.env.PROXY_PASSWORD;
+    let proxyUrl = proxyServer;
+    if (proxyUser && proxyPass && !proxyUrl.includes('@')) {
+        const [scheme, rest] = proxyUrl.split('://');
+        proxyUrl = `${scheme}://${encodeURIComponent(proxyUser)}:${encodeURIComponent(proxyPass)}@${rest}`;
+    }
+    return { server: proxyUrl };
+}
+
 async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
     console.log("🌐 Triggering Account 3 Website URL Booster comment (100% Coverage)...");
     try {
@@ -979,9 +1000,13 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             return;
         }
 
+        const boosterProxy = resolveProxy();
+        if (boosterProxy) console.log(`🌐 Booster using proxy: ${boosterProxy.server}`);
+        else console.warn("⚠️ Booster running WITHOUT a proxy — Facebook usually strips datacenter sessions.");
         const boosterBrowser = await chromium.launch({
             headless: true,
-            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+            ...(boosterProxy ? { proxy: boosterProxy } : {}),
         });
         const boosterContext = await boosterBrowser.newContext({
             viewport: { width: 1280, height: 900 },
@@ -1433,7 +1458,6 @@ async function runBot(account: FbAccount): Promise<boolean> {
         return true;
     }
 
-    const proxyServer = process.env.PROXY_SERVER;
     const userDataDir = path.join(__dirname, 'FiestaSession');
     console.log(`🧠 Using Persistent Context: ${userDataDir}`);
 
@@ -1464,17 +1488,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
     // Headed mode: no UA override, no image suppression — a normal Linux Chrome
     // (matching its real platform) is far less suspicious than a Mac UA on Linux.
 
-    if (proxyServer) {
-        // Embed credentials directly in the SOCKS5 URL (required for SOCKS auth)
-        const proxyUser = process.env.PROXY_USERNAME;
-        const proxyPass = process.env.PROXY_PASSWORD;
-        let proxyUrl = proxyServer;
-        if (proxyUser && proxyPass && !proxyUrl.includes('@')) {
-            const [scheme, rest] = proxyUrl.split('://');
-            proxyUrl = `${scheme}://${encodeURIComponent(proxyUser)}:${encodeURIComponent(proxyPass)}@${rest}`;
-        }
-        console.log(`🌐 Using Proxy: ${proxyUrl}`);
-        contextOptions.proxy = { server: proxyUrl };
+    const mainProxy = resolveProxy();
+    if (mainProxy) {
+        console.log(`🌐 Using Proxy: ${mainProxy.server}`);
+        contextOptions.proxy = mainProxy;
+    } else {
+        console.warn("⚠️ No PROXY_SERVER set. Facebook strips sessions loaded from this datacenter IP — set a residential proxy or open a reverse SSH tunnel (ssh -N -R 1080 deploy@159.13.36.205) and use socks5://127.0.0.1:1080.");
     }
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
