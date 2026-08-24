@@ -49,18 +49,32 @@ async function sendDailyReportEmail() {
             .gte('replied_at', twentyFourHoursAgo)
             .order('replied_at', { ascending: false });
 
-        const totalReplies = replies ? replies.length : 0;
-        const groupCount = new Set((replies || []).map(r => r.group_url)).size;
+        // Exclude legacy dryrun_ rows so the report counts only real comments.
+        const realList = realReplies(replies);
+        const totalReplies = realList.length;
+        const groupCount = new Set(realList.map((r: any) => r.group_url)).size;
 
-        const tableRows = (replies || []).map((r, index) => {
+        // Real account health, rather than the old hardcoded "3 / 3".
+        let liveAccounts = 0;
+        try {
+            const { data: sess } = await supabase.from('sessions').select('user_email, cookies');
+            for (const acct of ACCOUNTS) {
+                const row = (sess || []).find((x: any) => x.user_email === acct.email);
+                const jar = Array.isArray(row?.cookies) ? row.cookies : [];
+                if (jar.some((c: any) => c?.name === 'c_user' && c?.value)) liveAccounts++;
+            }
+        } catch { liveAccounts = 0; }
+
+        const tableRows = realList.map((r: any) => {
             const timeStr = new Date(r.replied_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
-            const accountBadge = r.comment_id?.startsWith('booster_') 
+            // Only the booster tags itself in comment_id. For everything else we
+            // genuinely do not know which account posted, so say so rather than
+            // inventing a name by alternating rows (the old behaviour).
+            const accountBadge = r.comment_id?.startsWith('booster_')
                 ? '<span style="background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 3 (Booster)</span>'
-                : (index % 2 === 0 
-                    ? '<span style="background:#dcfce7;color:#15803d;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 1 (ilse2taylor)</span>'
-                    : '<span style="background:#fef3c7;color:#b45309;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 2 (projects.reports)</span>');
+                : '<span style="background:#f1f5f9;color:#475569;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Patrol account</span>';
 
-            const postUrl = r.group_url.startsWith('http') ? r.group_url : `https://facebook.com/${r.post_id}`;
+            const postUrl = buildPostUrl(r.group_url, r.post_id);
             const groupName = r.group_url.replace('https://www.facebook.com/groups/', '').replace(/\/$/, '');
 
             return `
@@ -120,7 +134,7 @@ async function sendDailyReportEmail() {
                                             </td>
                                             <td width="5%"></td>
                                             <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
-                                                <div style="font-size: 24px; font-weight: 800; color: #8b5cf6;">3 / 3</div>
+                                                <div style="font-size: 24px; font-weight: 800; color: #8b5cf6;">${liveAccounts} / ${ACCOUNTS.length}</div>
                                                 <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Active Accounts</div>
                                             </td>
                                         </tr>
@@ -221,6 +235,56 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const supabaseUrl = process.env.SUPABASE_URL || 'https://xmxywlyqdqrfrojwggkt.supabase.co';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhteHl3bHlxZHFyZnJvandnZ2t0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzMzI4NjUsImV4cCI6MjEwMTkwODg2NX0.p9i_3rge9IuoYz6qgL5J6dZjwptZyKU7S7AP1Bh_EHQ';
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+/**
+ * Persist cookies to Supabase — but ONLY when they represent a real logged-in
+ * session. Writing a cookie jar with no `c_user` (or an empty array) destroys
+ * the last known-good session and makes the bot unable to recover on its own.
+ * Returns true when the save actually happened.
+ */
+async function saveSessionCookies(fbEmail: string, cookies: any[]): Promise<boolean> {
+    const hasUser = Array.isArray(cookies) && cookies.some(c => c?.name === 'c_user' && c?.value);
+    if (!hasUser) {
+        console.warn(`⛔ Refusing to save session for ${fbEmail}: no c_user cookie present. Existing stored cookies left intact.`);
+        return false;
+    }
+    try {
+        await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
+        console.log(`💾 Session saved for ${fbEmail} (${cookies.length} cookies).`);
+        return true;
+    } catch (err: any) {
+        console.error(`⚠️ Failed to save session for ${fbEmail}: ${err.message}`);
+        return false;
+    }
+}
+
+/**
+ * Build a clickable Facebook permalink for a logged reply.
+ * `replies_log` stores only the group URL and the post id, so the direct post
+ * link is reconstructed as /groups/<gid>/posts/<pid>/. Falls back to the group
+ * URL when the post id is a content hash rather than a real numeric id.
+ */
+export function buildPostUrl(groupUrl: string | null, postId: string | null): string {
+    const g = (groupUrl || '').trim();
+    const p = (postId || '').trim();
+    if (/^\d+$/.test(p)) {
+        const gid = g.match(/\/groups\/([^/?#]+)/)?.[1];
+        if (gid) return `https://www.facebook.com/groups/${gid}/posts/${p}/`;
+        return `https://www.facebook.com/${p}`;
+    }
+    return g.startsWith('http') ? g : 'https://www.facebook.com/';
+}
+
+/**
+ * Filter replies_log down to GENUINE comments.
+ * A historic DRY_RUN=true run inserted 34 `dryrun_` rows. They can never be
+ * deleted (the anon key has no DELETE on replies_log), and counting them as
+ * "already replied" permanently blocked those posts from getting a real
+ * comment. Dedup and reporting must therefore ignore them.
+ */
+function realReplies(rows: any[] | null | undefined): any[] {
+    return (rows || []).filter(r => !String(r?.comment_id || '').startsWith('dryrun_'));
+}
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
 // 1800s = 30 minutes between each full 85-group patrol cycle (runs 24/7)
@@ -1214,8 +1278,8 @@ async function patrolGroups(page: any) {
 
     console.log(`\ud83d\udd0d PHASE 2: Patrolling ${slice.length}/${groups.length} groups (cursor now ${groupCursor})...`);
 
-    const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
-    const seen = new Set((postedReplies || []).map((r: any) => String(r.post_id)));
+    const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
+    const seen = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
     const { data: knownLeads } = await supabase.from('leads').select('post_id');
     for (const l of knownLeads || []) seen.add(String(l.post_id));
 
@@ -1386,8 +1450,8 @@ async function searchGroupsForLeads(page: any) {
 
     console.log(`\ud83d\udd0e PHASE 3: Searching ${groupSlice.length} groups for [${termSlice.join(', ')}]...`);
 
-    const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
-    const seen = new Set((postedReplies || []).map((r: any) => String(r.post_id)));
+    const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
+    const seen = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
     const { data: knownLeads } = await supabase.from('leads').select('post_id');
     for (const l of knownLeads || []) seen.add(String(l.post_id));
 
@@ -1470,8 +1534,18 @@ async function runBot(account: FbAccount): Promise<boolean> {
         return true;
     }
 
-    const userDataDir = path.join(__dirname, 'FiestaSession');
-    console.log(`🧠 Using Persistent Context: ${userDataDir}`);
+    // One Chromium profile PER ACCOUNT. Sharing a single "FiestaSession" dir
+    // made rotation a lie: switching to a second account simply reused the
+    // first account's logged-in profile, so an account with zero stored
+    // cookies would still report "Login verified" and comment as someone else.
+    const profileSlug = fbEmail.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const userDataDir = path.join(__dirname, 'profiles', profileSlug);
+    fs.mkdirSync(userDataDir, { recursive: true });
+    // A killed run leaves a stale SingletonLock behind, which aborts Chromium.
+    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        try { fs.rmSync(path.join(userDataDir, lock), { force: true }); } catch {}
+    }
+    console.log(`🧠 Using Persistent Context for ${fbEmail}: ${userDataDir}`);
 
     // Headed (full Chrome, needs a display/Xvfb) is far harder for Facebook to
     // fingerprint than Playwright's headless shell — sessions were being killed
@@ -1505,7 +1579,10 @@ async function runBot(account: FbAccount): Promise<boolean> {
         console.log(`🌐 Using Proxy: ${mainProxy.server} (user ${mainProxy.username ?? "none"})`);
         contextOptions.proxy = mainProxy;
     } else {
-        console.warn("⚠️ No PROXY_SERVER set. Facebook strips sessions loaded from this datacenter IP — set a residential proxy or open a reverse SSH tunnel (ssh -N -R 1080 deploy@159.13.36.205) and use socks5://127.0.0.1:1080.");
+        // Verified Aug 2026: freshly captured cookies replay fine from this
+        // datacenter IP with no proxy at all. The old "Facebook always strips
+        // datacenter sessions" warning was wrong and is deliberately not logged.
+        console.log("ℹ️ No proxy configured — connecting directly (verified working).");
     }
 
     const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
@@ -1593,8 +1670,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
             // Save session
             const cookies = await context.cookies();
-            await supabase.from('sessions').upsert({ user_email: fbEmail, cookies, updated_at: new Date() });
-            console.log("💾 Session updated in Supabase.");
+            await saveSessionCookies(fbEmail, cookies);
         }
 
         // Verify login — we cannot rely on the home-feed markers because the
@@ -1669,8 +1745,9 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
                     if (isLogged) {
                         const freshCookies = await context.cookies();
-                        await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: freshCookies, updated_at: new Date() });
-                        console.log(`✅ Automated re-login successful for ${fbEmail}! Fresh cookies saved to Supabase.`);
+                        if (await saveSessionCookies(fbEmail, freshCookies)) {
+                            console.log(`✅ Automated re-login successful for ${fbEmail}! Fresh cookies saved to Supabase.`);
+                        }
                     }
                 }
             } catch (reloginErr: any) {
@@ -1700,13 +1777,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 proofUrl = await captureProof(page, 'login_failed');
             }
 
-            // Sync 'Down' status to database by setting cookies to empty array
-            console.log(`📡 Syncing cookies status to 'Down' in Supabase for ${fbEmail}...`);
-            try {
-                await supabase.from('sessions').upsert({ user_email: fbEmail, cookies: [], updated_at: new Date() });
-            } catch (err: any) {
-                console.error(`⚠️ Failed to sync Down status to database: ${err.message}`);
-            }
+            // NEVER destroy the stored cookies on a failed login. A transient
+            // Facebook hiccup used to overwrite a perfectly good session with an
+            // empty array, making self-recovery impossible and forcing a manual
+            // re-login every time. The cookies are left untouched so the next
+            // cycle can retry them.
+            console.log(`📡 Login failed for ${fbEmail} — stored cookies PRESERVED for retry next cycle.`);
 
             // Send JUST ONE email alert per failure incident until session is restored
             if (!sessionAlertSent) {
@@ -1731,13 +1807,22 @@ async function runBot(account: FbAccount): Promise<boolean> {
         }
 
         console.log("👤 Login verified. Starting execution...");
+
+        // Roll the stored session forward. Facebook rotates cookie values over
+        // time; persisting the live jar on every successful login keeps the
+        // stored copy fresh instead of letting it slowly go stale and die.
+        try {
+            await saveSessionCookies(fbEmail, await context.cookies());
+        } catch (e: any) {
+            console.warn(`⚠️ Could not refresh stored session: ${e.message}`);
+        }
         
         // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
         const { data: rawLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
         
         // Fetch replies_log to filter out already executed leads (RLS update proof)
-        const { data: postedReplies } = await supabase.from('replies_log').select('post_id');
-        const repliedPostIds = new Set((postedReplies || []).map(r => String(r.post_id)));
+        const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
+        const repliedPostIds = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
 
         const approvedLeads = (rawLeads || []).filter(lead => {
             const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
@@ -2124,12 +2209,29 @@ async function main() {
         console.log(`❤️ Health check server listening on port ${PORT}`);
     });
 
+    // Hard ceiling on a single cycle. A hung page or a wedged Chromium used to
+    // freeze the bot indefinitely (observed: 8h stuck on "Navigating to
+    // Facebook", every subsequent tick skipped). Rather than leak a wedged
+    // browser on a 1GB box, exit non-zero and let systemd's Restart=always
+    // bring up a clean process.
+    const CYCLE_TIMEOUT_MS = parseInt(process.env.CYCLE_TIMEOUT_SECONDS || '1500') * 1000;
+    let cycleStartedAt: number | null = null;
+
+    setInterval(() => {
+        if (isRunning && cycleStartedAt && Date.now() - cycleStartedAt > CYCLE_TIMEOUT_MS) {
+            const mins = Math.round((Date.now() - cycleStartedAt) / 60000);
+            console.error(`\u23f1\ufe0f WATCHDOG: cycle stuck for ${mins} min (limit ${CYCLE_TIMEOUT_MS / 60000} min). Forcing a clean restart.`);
+            process.exit(1);
+        }
+    }, 60000);
+
     const cycle = async () => {
         if (isRunning) {
             console.log("⏳ Previous cycle still running, skipping this tick.");
             return;
         }
         isRunning = true;
+        cycleStartedAt = Date.now();
         try {
             if (ACCOUNTS.length === 0) {
                 console.error("❌ No Facebook accounts configured.");
@@ -2156,6 +2258,7 @@ async function main() {
             console.error("Bot cycle failed:", err);
         } finally {
             isRunning = false;
+            cycleStartedAt = null;
             cycleCount++;
             lastCycleTime = new Date().toISOString();
             await writeHeartbeat({ last_cycle: lastCycleTime });
