@@ -148,7 +148,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* Footer */}
           <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
             <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
-              <span>Version 1.2.0</span>
+              <span>Version 1.3.0</span>
               <VpsBadge />
             </div>
           </div>

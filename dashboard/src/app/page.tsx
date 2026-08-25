@@ -95,6 +95,22 @@ function displayAccount(raw: string | null, commentId: string | null): string {
   return raw.includes("@") ? raw.split("@")[0] : raw;
 }
 
+/**
+ * The bot stores the real Facebook comment permalink in `comment_id`
+ * (replies_log has no comment_url column and the anon key cannot add one).
+ * Booster rows carry a `booster_` prefix. Anything that is not a URL is a
+ * legacy row from before permalink capture existed — fall back to the post.
+ */
+function proofLink(commentId: string | null, groupUrl: string, postId: string): string | null {
+  const raw = String(commentId || "").replace(/^booster_/, "");
+  if (raw.startsWith("http")) return raw;
+  if (/^\d+$/.test(String(postId))) {
+    const gid = groupUrl.match(/\/groups\/([^/?#]+)/)?.[1];
+    if (gid) return `https://www.facebook.com/groups/${gid}/posts/${postId}/`;
+  }
+  return null;
+}
+
 const PROFILES = [
   { name: "Ilse",            key: "ilse2taylor@gmail.com",            initial: "I", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
   { name: "Taylor",          key: "projects.reports.ilse@gmail.com",  initial: "T", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
@@ -145,9 +161,12 @@ export default function DashboardPage() {
         .from("leads")
         .select("*", { count: "exact", head: true });
 
+      // Legacy DRY_RUN rows are not real comments — never count them, or the
+      // header shows dozens of "comments posted" that never happened.
       const { count: totalReplies } = await supabase
         .from("replies_log")
-        .select("*", { count: "exact", head: true });
+        .select("*", { count: "exact", head: true })
+        .not("comment_id", "like", "dryrun_%");
 
       const { count: activeGroups } = await supabase
         .from("groups")
@@ -167,6 +186,7 @@ export default function DashboardPage() {
       const { data: replyData, error: replyErr } = await supabase
         .from("replies_log")
         .select("id, post_id, group_url, comment_id, user_profile_id, replied_at")
+        .not("comment_id", "like", "dryrun_%")
         .order("replied_at", { ascending: false })
         .limit(100);
       if (replyErr) console.error("replies_log query error:", replyErr.message);
@@ -174,7 +194,7 @@ export default function DashboardPage() {
       setReplies(((replyData ?? []) as any[]).map((r) => ({
         ...r,
         account_name: r.user_profile_id ?? null,
-        comment_url: null,
+        comment_url: proofLink(r.comment_id, r.group_url ?? "", r.post_id ?? ""),
       })) as ReplyLog[]);
 
       // Real session/cookie state + VPS heartbeat
