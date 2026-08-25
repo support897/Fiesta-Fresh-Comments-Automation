@@ -128,7 +128,7 @@ export function Sidebar() {
       {/* Footer Version */}
       <div className="p-4 border-t border-slate-100 flex flex-col gap-2 bg-white">
         <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
-          <span>Version 1.2.0</span>
+          <span>Version 1.3.0</span>
           <span
             title={vpsLastSeen ? `Last heartbeat: ${new Date(vpsLastSeen).toLocaleString("en-AU")}` : "No heartbeat recorded"}
             className={`flex items-center gap-1 font-bold lowercase ${vpsOnline ? "text-emerald-600" : "text-red-600"}`}
