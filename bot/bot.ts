@@ -72,9 +72,12 @@ async function sendDailyReportEmail() {
             // inventing a name by alternating rows (the old behaviour).
             const accountBadge = r.comment_id?.startsWith('booster_')
                 ? '<span style="background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 3 (Booster)</span>'
-                : '<span style="background:#f1f5f9;color:#475569;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Patrol account</span>';
+                : `<span style="background:#f1f5f9;color:#475569;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">${r.user_profile_id || 'Patrol account'}</span>`;
 
-            const postUrl = buildPostUrl(r.group_url, r.post_id);
+            // Prefer the captured comment permalink (stored in comment_id) so the
+            // "View Post" button lands on the actual comment, not just the group.
+            const rawProof = String(r.comment_id || '').replace(/^booster_/, '');
+            const postUrl = rawProof.startsWith('http') ? rawProof : buildPostUrl(r.group_url, r.post_id);
             const groupName = r.group_url.replace('https://www.facebook.com/groups/', '').replace(/\/$/, '');
 
             return `
@@ -284,6 +287,52 @@ export function buildPostUrl(groupUrl: string | null, postId: string | null): st
  */
 function realReplies(rows: any[] | null | undefined): any[] {
     return (rows || []).filter(r => !String(r?.comment_id || '').startsWith('dryrun_'));
+}
+
+/**
+ * After posting, find the permalink of the comment we just left so the CEO gets
+ * clickable PROOF on the dashboard instead of a link to the whole group.
+ * Facebook renders a timestamp anchor on each comment whose href carries
+ * `comment_id=`; we look for the one sitting next to our own comment text.
+ * Doubles as a post-verification: if we cannot see our comment on the page at
+ * all, the caller knows the Enter keypress did not actually publish anything.
+ */
+async function captureCommentPermalink(page: any, fallbackUrl: string): Promise<{ url: string; verified: boolean }> {
+    const MARKER = '200% Happiness Guarantee';
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await new Promise(r => setTimeout(r, 2500));
+        try {
+            const found = await page.evaluate((marker: string) => {
+                const nodes = Array.from(document.querySelectorAll('div[role="article"], li, div'));
+                const mine = nodes.filter(n => (n.textContent || '').includes(marker)
+                    && (n.textContent || '').length < 3000);
+                for (const n of mine.reverse()) {
+                    let scope: Element | null = n;
+                    for (let up = 0; up < 4 && scope; up++) {
+                        const a = Array.from(scope.querySelectorAll('a[href*="comment_id="]'))
+                            .map(el => (el as HTMLAnchorElement).href)[0];
+                        if (a) return a;
+                        scope = scope.parentElement;
+                    }
+                }
+                // Comment is visible but no permalink anchor rendered yet.
+                return mine.length ? 'SEEN' : '';
+            }, MARKER);
+            if (found && found !== 'SEEN') {
+                const clean = found.split('&__cft')[0];
+                console.log(`🔗 Comment permalink captured: ${clean.slice(0, 110)}`);
+                return { url: clean, verified: true };
+            }
+            if (found === 'SEEN') {
+                console.log('🔗 Comment visible on page but no permalink anchor — using post URL.');
+                return { url: fallbackUrl, verified: true };
+            }
+        } catch (e: any) {
+            console.warn(`⚠️ Permalink capture attempt failed: ${e.message?.slice(0, 80)}`);
+        }
+    }
+    console.warn('⚠️ Could not confirm our comment on the page after posting — logging post URL, unverified.');
+    return { url: fallbackUrl, verified: false };
 }
 
 const DRY_RUN = process.env.DRY_RUN === 'true';
@@ -1152,10 +1201,17 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             await boosterPage.keyboard.press('Enter');
             console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
 
+            const boosterProof = await boosterPage.evaluate(() => {
+                const a = Array.from(document.querySelectorAll('a[href*="comment_id="]'))
+                    .map(el => (el as HTMLAnchorElement).href);
+                const last = a[a.length - 1];
+                return last ? (last.split('&__cft')[0] || last) : '';
+            }).catch(() => '');
             await supabase.from('replies_log').insert({
                 post_id: postId,
                 group_url: groupUrl,
-                comment_id: `booster_${Date.now()}`,
+                comment_id: `booster_${boosterProof || targetUrl}`,
+                user_profile_id: 'Website Booster',
                 replied_at: new Date()
             });
         } else {
@@ -1942,10 +1998,15 @@ We will also send you a DM just in case you have any questions. Make sure to che
                             console.log(`📍 Pressing Enter...`);
                             await page.keyboard.press('Enter');
 
+                            const proof = await captureCommentPermalink(page, postUrl);
                             const { error: replyErr } = await supabase.from('replies_log').insert({
                                 post_id: lead.post_id,
                                 group_url: lead.group_url,
-                                comment_id: `comment_${Date.now()}`,
+                                // The real permalink lives here (replies_log has no
+                                // comment_url column and the anon key cannot add one).
+                                // The dashboard renders any http value as a clickable link.
+                                comment_id: proof.url,
+                                user_profile_id: fbEmail,
                                 replied_at: new Date()
                             });
                             const { data: updatedLeads, error: leadErr } = await supabase
@@ -2028,10 +2089,12 @@ We will also send you a DM just in case you have any questions. Make sure to che
                                         await typeComment(page, templateText);
                                         await page.keyboard.press('Enter');
 
+                                        const proof = await captureCommentPermalink(page, buildPostUrl(lead.group_url, lead.post_id));
                                         const { error: replyErr } = await supabase.from('replies_log').insert({
                                             post_id: lead.post_id,
                                             group_url: lead.group_url,
-                                            comment_id: `comment_${Date.now()}`,
+                                            comment_id: proof.url,
+                                            user_profile_id: fbEmail,
                                             replied_at: new Date()
                                         });
                                         const { data: updatedLeads, error: leadErr } = await supabase
