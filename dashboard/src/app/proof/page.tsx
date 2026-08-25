@@ -32,6 +32,8 @@ export default function URLGallery() {
       const { data, error } = await supabase
         .from("replies_log")
         .select("*")
+        // Legacy DRY_RUN rows are not real comments — hide them.
+        .not("comment_id", "like", "dryrun_%")
         .order("replied_at", { ascending: false });
 
       if (error) throw error;
@@ -109,7 +111,12 @@ export default function URLGallery() {
             const fallbackLink = reply.group_url.startsWith("http") 
               ? reply.group_url 
               : `https://www.facebook.com/${reply.post_id}`;
-            const targetLink = reply.comment_url || fallbackLink;
+            // The bot stores the real comment permalink in comment_id
+            // (booster rows are prefixed `booster_`).
+            const storedProof = String(reply.comment_id || "").replace(/^booster_/, "");
+            const targetLink = (storedProof.startsWith("http") && storedProof)
+              || reply.comment_url
+              || fallbackLink;
 
             return (
               <div 
