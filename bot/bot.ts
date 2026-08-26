@@ -2332,6 +2332,12 @@ async function main() {
     // Independent heartbeat so the dashboard sees liveness mid-cycle too
     setInterval(() => { writeHeartbeat({ last_cycle: lastCycleTime }); }, 60000);
 
+    // The 6 PM report used to be triggered from INSIDE runBot(), so it only went
+    // out if a Facebook login had just succeeded. Whenever the sessions were
+    // down — exactly when you most need to be told — no report was sent at all.
+    // It now runs on its own timer, independent of Facebook entirely.
+    setInterval(() => { checkAndSendDailyReport().catch(() => {}); }, 5 * 60 * 1000);
+
     // Run immediately, then on interval
     await cycle();
     setInterval(() => {
