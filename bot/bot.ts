@@ -285,6 +285,37 @@ export function buildPostUrl(groupUrl: string | null, postId: string | null): st
  * "already replied" permanently blocked those posts from getting a real
  * comment. Dedup and reporting must therefore ignore them.
  */
+/**
+ * Password-login back-off. Repeatedly failing a password login is what gets a
+ * Facebook account locked or checkpointed, and a 30-minute cycle would retry
+ * forever. After a failed attempt we refuse to try that account's password
+ * again for PASSWORD_RETRY_HOURS; the stored cookies are still retried every
+ * cycle, so a session that comes back on its own is picked up immediately.
+ */
+const PASSWORD_RETRY_HOURS = parseInt(process.env.PASSWORD_RETRY_HOURS || '6');
+function pwAttemptFile(email: string): string {
+    return path.join(__dirname, `.pwattempt_${email.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`);
+}
+function recordPasswordAttempt(email: string): void {
+    try { fs.writeFileSync(pwAttemptFile(email), String(Date.now()), 'utf8'); } catch {}
+}
+function clearPasswordAttempt(email: string): void {
+    try { fs.rmSync(pwAttemptFile(email), { force: true }); } catch {}
+}
+function passwordAttemptAllowed(email: string): boolean {
+    try {
+        const raw = fs.readFileSync(pwAttemptFile(email), 'utf8').trim();
+        const last = parseInt(raw);
+        if (!last) return true;
+        const hours = (Date.now() - last) / 3600000;
+        if (hours < PASSWORD_RETRY_HOURS) {
+            console.warn(`\u23f8\ufe0f Skipping password login for ${email}: last attempt failed ${hours.toFixed(1)}h ago (waiting ${PASSWORD_RETRY_HOURS}h to avoid a lockout). Stored cookies still retried.`);
+            return false;
+        }
+    } catch {}
+    return true;
+}
+
 function realReplies(rows: any[] | null | undefined): any[] {
     return (rows || []).filter(r => !String(r?.comment_id || '').startsWith('dryrun_'));
 }
@@ -1711,6 +1742,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
         if (await loginMarkers.first().isVisible() && !hasUsablePassword) {
             console.warn(`🔒 Login screen shown for ${fbEmail} but no usable password is configured — cookie-only mode. Re-prime this account's cookies (dashboard → Cookies).`);
+        } else if (await loginMarkers.first().isVisible() && !passwordAttemptAllowed(fbEmail)) {
+            console.warn(`🔒 Login screen shown for ${fbEmail} but password login is backed off after a recent failure.`);
         } else if (await loginMarkers.first().isVisible()) {
             console.log("🔒 Login screen detected. Logging in...");
             await humanType(page, '[name="email"]', fbEmail);
@@ -1726,6 +1759,11 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
             // Save session
             const cookies = await context.cookies();
+            if (cookies.some((c: any) => c.name === 'c_user' && c.value)) {
+                clearPasswordAttempt(fbEmail);
+            } else {
+                recordPasswordAttempt(fbEmail);
+            }
             await saveSessionCookies(fbEmail, cookies);
         }
 
@@ -1756,6 +1794,9 @@ async function runBot(account: FbAccount): Promise<boolean> {
             try {
                 if (!hasUsablePassword) {
                     throw new Error('cookie-only mode: no password configured, skipping automated re-login');
+                }
+                if (!passwordAttemptAllowed(fbEmail)) {
+                    throw new Error('password login backed off after a recent failure');
                 }
                 // Clear existing session context cookies to get a clean slate
                 await context.clearCookies();
@@ -1793,11 +1834,24 @@ async function runBot(account: FbAccount): Promise<boolean> {
                         } catch (e) {}
                     }
 
-                    // Verify if re-login succeeded
+                    // Verify if re-login succeeded. This MUST demand a real
+                    // c_user cookie: the old negative-only check reported
+                    // "Login verified" after a password login that had actually
+                    // been bounced, so the bot patrolled while logged out and
+                    // could never post a comment.
                     const newUrl = page.url();
                     const newLoginVisible = await page.locator('input[name="email"], #email, input[name="pass"], #pass').first().isVisible().catch(() => false);
                     const newCheckpoint = await isSessionCheckpoint(page);
-                    isLogged = !newLoginVisible && !newCheckpoint && !newUrl.includes('login') && !newUrl.includes('checkpoint');
+                    const postLoginCookies = await context.cookies().catch(() => [] as any[]);
+                    const postLoginCUser = postLoginCookies.some((c: any) => c.name === 'c_user' && c.value);
+                    isLogged = postLoginCUser && !newLoginVisible && !newCheckpoint
+                        && !newUrl.includes('login') && !newUrl.includes('checkpoint');
+                    if (!postLoginCUser) {
+                        console.error(`\u274c Password login for ${fbEmail} did not produce a c_user cookie — treating it as FAILED (url: ${newUrl.slice(0, 80)}).`);
+                        recordPasswordAttempt(fbEmail);
+                    } else {
+                        clearPasswordAttempt(fbEmail);
+                    }
 
                     if (isLogged) {
                         const freshCookies = await context.cookies();
