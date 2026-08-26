@@ -1,4 +1,5 @@
 import { chromium } from 'playwright-extra';
+import { TOTP, Secret } from 'otpauth';
 // @ts-ignore
 import type { Page, Locator } from 'playwright-core';
 import stealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -286,6 +287,58 @@ export function buildPostUrl(groupUrl: string | null, postId: string | null): st
  * comment. Dedup and reporting must therefore ignore them.
  */
 /**
+ * Clear Facebook's two-step verification page without a human.
+ * Both commenting accounts have an authenticator app enrolled, so a correct
+ * password lands on /two_step_verification/authentication/ and stops there.
+ * Given the account's TOTP secret (the "setup key" from Facebook's
+ * authentication-app screen) we generate the current 6-digit code with otpauth
+ * and submit it, then accept the "trust this device" prompt so future logins
+ * from this machine skip the challenge entirely.
+ * Returns true when a code was submitted.
+ */
+async function completeTwoFactor(page: any, secret: string | undefined, email: string): Promise<boolean> {
+    if (!/two_step_verification|checkpoint\/\?next|login\/device-based\/regular\/login/.test(page.url())) return false;
+    if (!secret) {
+        console.error(`\u274c ${email} is asking for a 2FA code and no TOTP secret is configured. Add "totpSecret" for this account in FB_ACCOUNTS (Facebook \u2192 Password and security \u2192 Two-factor authentication \u2192 Authentication app \u2192 setup key).`);
+        return false;
+    }
+    try {
+        const totp = new TOTP({
+            issuer: 'Facebook', label: email, algorithm: 'SHA1', digits: 6, period: 30,
+            secret: Secret.fromBase32(secret.replace(/\s+/g, '').toUpperCase()),
+        });
+        const code = totp.generate();
+        console.log(`\ud83d\udd10 Two-step verification requested for ${email} — submitting generated code.`);
+        const codeInput = page.locator(
+            'input[name="approvals_code"], input[autocomplete="one-time-code"], ' +
+            'input[aria-label*="code" i], input[type="text"]'
+        ).first();
+        await codeInput.waitFor({ state: 'visible', timeout: 15000 });
+        await codeInput.fill(code);
+        await randomDelay(600, 1200);
+        const submit = page.locator(
+            'button[type="submit"], div[role="button"]:has-text("Continue"), ' +
+            'button:has-text("Continue"), button:has-text("Submit")'
+        ).first();
+        if (await submit.isVisible().catch(() => false)) await submit.click().catch(() => {});
+        else await codeInput.press('Enter');
+        await randomDelay(5000, 7000);
+        // "Was this you?" / "Trust this device" / "Save browser" follow-ups.
+        for (const label of ['Yes', 'Trust this device', 'Save browser', 'This was me', 'Continue', 'OK']) {
+            const btn = page.locator(`button:has-text("${label}"), div[role="button"]:has-text("${label}")`).first();
+            if (await btn.isVisible().catch(() => false)) {
+                await btn.click().catch(() => {});
+                await randomDelay(2500, 4000);
+            }
+        }
+        return true;
+    } catch (e: any) {
+        console.error(`\u274c Two-step verification failed for ${email}: ${e.message?.slice(0, 120)}`);
+        return false;
+    }
+}
+
+/**
  * Password-login back-off. Repeatedly failing a password login is what gets a
  * Facebook account locked or checkpointed, and a 30-minute cycle would retry
  * forever. After a failed attempt we refuse to try that account's password
@@ -375,7 +428,7 @@ const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '1800') * 10
 // Falls back to FB_EMAIL/FB_PASSWORD for backward compatibility
 // password is optional: cookie-only accounts are supported so the bot never
 // attempts a password login with a placeholder/missing secret.
-interface FbAccount { email: string; password?: string | undefined; }
+interface FbAccount { email: string; password?: string | undefined; totpSecret?: string | undefined; }
 
 function loadAccounts(): FbAccount[] {
     const raw = process.env.FB_ACCOUNTS;
@@ -1754,6 +1807,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
             await page.click('button[name="login"], [aria-label="Log in"], [aria-label="Log In"], input[type="submit"]').catch(() => null);
             
             console.log("⏳ Waiting for landing page...");
+            await completeTwoFactor(page, account.totpSecret, fbEmail);
             await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA?"));
             await randomDelay(3000, 5000);
 
@@ -1833,6 +1887,9 @@ async function runBot(account: FbAccount): Promise<boolean> {
                             }
                         } catch (e) {}
                     }
+
+                    // If Facebook demands the authenticator code, answer it.
+                    await completeTwoFactor(page, account.totpSecret, fbEmail);
 
                     // Verify if re-login succeeded. This MUST demand a real
                     // c_user cookie: the old negative-only check reported

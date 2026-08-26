@@ -25,6 +25,7 @@
     "dotenv": "^17.4.2",
     "groq-sdk": "^1.5.0",
     "nodemailer": "^9.0.5",
+    "otpauth": "^9.5.1",
     "playwright-core": "^1.59.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-core": "^24.41.0",
