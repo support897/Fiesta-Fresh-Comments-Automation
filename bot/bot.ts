@@ -1547,6 +1547,20 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
  * (no schema change / DDL needed) under the reserved key __heartbeat__.
  */
 const HEARTBEAT_KEY = '__heartbeat__';
+
+/**
+ * Real per-account login outcomes, published in the heartbeat.
+ *
+ * The dashboard used to mark a profile "Connected" whenever a cookie row
+ * existed, so two dead sessions showed green all morning while the bot was
+ * looping on "the saved session is dead". Cookie rows prove nothing; only a
+ * verified login does.
+ */
+const loginState: Record<string, { ok: boolean; at: string; reason?: string }> = {};
+function recordLoginResult(email: string, ok: boolean, reason?: string) {
+    loginState[email] = { ok, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
+}
+
 async function writeHeartbeat(extra: Record<string, any> = {}) {
     try {
         await supabase.from('sessions').upsert({
@@ -1558,6 +1572,7 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
                 cycles: cycleCount,
                 running: isRunning,
                 interval_seconds: SCAN_INTERVAL / 1000,
+                logins: loginState,
                 ...extra,
             }],
             updated_at: new Date(),
@@ -2139,6 +2154,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
             // re-login every time. The cookies are left untouched so the next
             // cycle can retry them.
             console.log(`📡 Login failed for ${fbEmail} — stored cookies PRESERVED for retry next cycle.`);
+            recordLoginResult(fbEmail, false, failureReason);
+            await writeHeartbeat();
 
             // Send JUST ONE email alert per failure incident until session is restored
             if (!sessionAlertSent) {
@@ -2163,6 +2180,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
         }
 
         console.log("👤 Login verified. Starting execution...");
+        recordLoginResult(fbEmail, true);
+        await writeHeartbeat();
 
         // Roll the stored session forward. Facebook rotates cookie values over
         // time; persisting the live jar on every successful login keeps the
