@@ -1477,6 +1477,13 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
  * health state instead of a hardcoded "24/7" badge. Uses the sessions table
  * (no schema change / DDL needed) under the reserved key __heartbeat__.
  */
+/**
+ * How old an approved lead may be before the bot refuses to act on it.
+ * A cleaning request from days ago has already been served, and the queue still
+ * contains rows captured before the scraper was fixed.
+ */
+const STALE_LEAD_MS = Number(process.env.STALE_LEAD_HOURS || 24) * 3600 * 1000;
+
 const HEARTBEAT_KEY = '__heartbeat__';
 
 /**
@@ -2132,7 +2139,34 @@ async function runBot(account: FbAccount): Promise<boolean> {
             // rows keep whatever status they were given by an older, looser
             // filter — including competitor ads and recruitment posts. Without
             // this guard the bot would comment on all of them.
-            const verdict = quickKeywordFilter(lead.post_text || '');
+            const leadText = lead.post_text || '';
+
+            // Guard 1: rows captured by the old whole-page scrape hold Facebook's
+            // own navigation blob, not a request. Never comment on those.
+            if (looksLikePageChrome(leadText)) {
+                console.log(`🛑 Lead ${lead.post_id} stored page chrome instead of post text — skipping.`);
+                return false;
+            }
+
+            // Guard 2: some rows captured a COMMENT on the post ("Name · 3h … Reply
+            // Share") rather than the post itself. Acting on those meant replying
+            // under a competitor's advertisement because a commenter said
+            // "I need cleaner". The post is not the lead, so skip it.
+            if (/\bReply\b[\s|]*\bShare\b\s*$/i.test(leadText.trim())) {
+                console.log(`🛑 Lead ${lead.post_id} captured a comment, not the post — skipping.`);
+                return false;
+            }
+
+            // Guard 3: age. A request from days ago is already served, and the
+            // queue still holds rows from before the scraper was fixed.
+            const createdAt = lead.created_at ? new Date(lead.created_at).getTime() : 0;
+            if (createdAt && Date.now() - createdAt > STALE_LEAD_MS) {
+                const hrs = ((Date.now() - createdAt) / 3600000).toFixed(0);
+                console.log(`🛑 Lead ${lead.post_id} is ${hrs}h old (limit ${STALE_LEAD_MS / 3600000}h) — skipping stale lead.`);
+                return false;
+            }
+
+            const verdict = quickKeywordFilter(leadText);
             if (verdict !== 'approve') {
                 console.log(`🛑 Lead ${lead.post_id} no longer passes the filter (${verdict}) — skipping stale approval.`);
                 return false;
@@ -2206,15 +2240,16 @@ async function runBot(account: FbAccount): Promise<boolean> {
                         console.log(`📍 contenteditable: ${ceCount}, textbox: ${tbCount}`);
 
                         // Try clicking the comment placeholder to activate the editor
+                        // Facebook's real label is "Write a public comment…", which the old
+                        // "Write a comment" match never hit, so the composer was never clicked.
                         const commentPlaceholder = page.locator(
+                            '[aria-label*="Write a public comment" i], ' +
                             '[aria-label*="Write a comment" i], ' +
                             '[aria-label*="Leave a comment" i], ' +
                             '[aria-placeholder*="comment" i], ' +
                             '[data-lexical-editor], ' +
                             '[contenteditable]'
                         ).first();
-                        await commentPlaceholder.click({ timeout: 3000 }).catch(() => {});
-                        await new Promise(r => setTimeout(r, 1000));
 
                         // On direct post page the comment box is present in DOM
                         const commentInput = page.locator(
@@ -2222,9 +2257,20 @@ async function runBot(account: FbAccount): Promise<boolean> {
                             '[role="textbox"][aria-label*="comment" i], ' +
                             '[contenteditable="true"]'
                         ).first();
-                        console.log(`📍 Waiting for comment input (10s)...`);
-                        try { await commentInput.waitFor({ state: 'visible', timeout: 10000 }); } catch(e) {}
-                        const inputReady = await iv(commentInput);
+                        // The composer mounts late on a cold, proxied VPS and only after the
+                        // placeholder is clicked. The old single 10s wait gave up on real
+                        // leads, so poll and re-click for up to ~45s before conceding.
+                        let inputReady = false;
+                        for (let attempt = 1; attempt <= 9 && !inputReady; attempt++) {
+                            await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
+                            try { await commentInput.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
+                            inputReady = await iv(commentInput);
+                            if (!inputReady) {
+                                console.log(`📍 Comment composer not up yet (attempt ${attempt}/9)…`);
+                                await page.mouse.wheel(0, 400).catch(() => {});
+                                await new Promise(r => setTimeout(r, 1500));
+                            }
+                        }
                         console.log(`📍 Comment input ready: ${inputReady}`);
 
                         if (inputReady) {
