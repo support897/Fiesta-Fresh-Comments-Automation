@@ -1071,6 +1071,58 @@ async function isSessionCheckpoint(page: any): Promise<boolean> {
 }
 
 /**
+ * Page chrome that proves we captured the feed/shell instead of one post.
+ * Seen in production: notification leads whose stored text began
+ * "Create a post / What's on your mind, Ilse? / Stories / Facebook x100".
+ */
+const PAGE_CHROME_MARKERS = [
+    "what's on your mind",
+    'create a post',
+    'create story',
+    'feed posts',
+];
+
+/** A blob is page chrome if it carries a shell marker or repeats "Facebook". */
+function looksLikePageChrome(text: string): boolean {
+    const t = (text || '').toLowerCase();
+    if (PAGE_CHROME_MARKERS.some(m => t.includes(m))) return true;
+    return (t.match(/facebook/g) || []).length >= 8;
+}
+
+/**
+ * Read the text of the TARGET post only — never the surrounding page.
+ *
+ * Order: the post's own message block, then the first article container. Any
+ * candidate that looks like page chrome or is implausibly long for a single
+ * post is discarded, so the classifier can only ever judge the post we are
+ * about to comment on. Returns '' when nothing trustworthy is found, which the
+ * caller treats as "skip this post".
+ */
+async function readTargetPostText(page: any): Promise<string> {
+    const MAX_POST_CHARS = 2000;
+    const candidates = [
+        page.locator('[role="article"]').first().locator('[data-ad-preview="message"]').first(),
+        page.locator('[data-ad-preview="message"]').first(),
+        page.locator('[role="article"]').first(),
+    ];
+
+    for (const loc of candidates) {
+        const raw = (await loc.innerText({ timeout: 4000 }).catch(() => '')).trim();
+        if (!raw || raw.length < 25) continue;
+        if (looksLikePageChrome(raw)) {
+            console.log(`   \u26a0\ufe0f Ignored page-chrome capture (${raw.length} chars) — not the post body.`);
+            continue;
+        }
+        if (raw.length > MAX_POST_CHARS) {
+            console.log(`   \u26a0\ufe0f Ignored oversized capture (${raw.length} chars) — likely multiple posts.`);
+            continue;
+        }
+        return raw;
+    }
+    return '';
+}
+
+/**
  * Capture and upload screenshot to Supabase Storage
  */
 async function captureProof(page: any, fileName: string) {
@@ -2240,18 +2292,19 @@ We will also send you a DM just in case you have any questions. Make sure to che
         for (const url of notificationUrls) {
             console.log(`\n🔔 Processing notification post: ${url}`);
             try {
-                await page.goto(url, { waitUntil: 'commit', timeout: 45000 });
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
                 await randomDelay(2000, 3000);
-                
-                // Expand comments or wait for post body
-                await page.waitForSelector('[data-ad-preview="message"], [role="main"]', { timeout: 15000 }).catch(() => {});
-                
-                const postContainer = page.locator('[data-ad-preview="message"], [role="main"]').first();
-                let postText = '';
-                try {
-                    postText = (await postContainer.innerText({ timeout: 5000 })).trim();
-                } catch (e) {
-                    console.log("   ⚠️ Could not read post text. Skipping.");
+
+                // Wait for the POST itself, never the page shell. The old code
+                // fell back to [role="main"] — the whole main column — so the
+                // classifier judged the entire feed (sidebar ads, other posts,
+                // "What's on your mind, Ilse?") and could approve on one post's
+                // words while commenting on a different one.
+                await page.waitForSelector('[data-ad-preview="message"], [role="article"]', { timeout: 15000 }).catch(() => {});
+
+                let postText = await readTargetPostText(page);
+                if (!postText) {
+                    console.log("   ⚠️ Could not read the post body itself. Skipping.");
                     continue;
                 }
                 
