@@ -169,7 +169,9 @@ export default function DashboardPage() {
       const { count: totalReplies } = await supabase
         .from("replies_log")
         .select("*", { count: "exact", head: true })
-        .not("comment_id", "like", "dryrun_%");
+        .not("comment_id", "like", "dryrun_%")
+        .not("comment_id", "like", "unverified_%")
+        .not("comment_id", "like", "comment_%");
 
       const { count: activeGroups } = await supabase
         .from("groups")
@@ -190,6 +192,8 @@ export default function DashboardPage() {
         .from("replies_log")
         .select("id, post_id, group_url, comment_id, user_profile_id, replied_at")
         .not("comment_id", "like", "dryrun_%")
+        .not("comment_id", "like", "unverified_%")
+        .not("comment_id", "like", "comment_%")
         .order("replied_at", { ascending: false })
         .limit(100);
       if (replyErr) console.error("replies_log query error:", replyErr.message);
@@ -514,7 +518,7 @@ export default function DashboardPage() {
                           rel="noreferrer"
                           className="text-indigo-600 hover:underline font-medium flex items-center gap-1"
                         >
-                          <span>View Comment</span>
+                          <span>{String(reply.comment_id || "").replace(/^booster_/, "").startsWith("http") ? "View Comment" : "View Post"}</span>
                           <ExternalLink className="w-3 h-3 opacity-60" />
                         </a>
                       ) : (
