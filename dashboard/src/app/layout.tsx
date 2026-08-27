@@ -7,11 +7,8 @@ import {
   LayoutDashboard,
   Camera,
   Calendar,
-  Image,
-  AlertTriangle,
   Compass,
   FileText,
-  Bell,
   Cookie,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -68,9 +65,6 @@ const managementNav = [
   { name: "Comment Templates", href: "/templates",     icon: FileText    },
   { name: "Facebook Groups",  href: "/groups",        icon: Compass     },
   { name: "Cookies 🍪",       href: "/cookies",       icon: Cookie      },
-  { name: "Photo Library",    href: "/photos",        icon: Image       },
-  { name: "Notifications",    href: "/notifications", icon: Bell        },
-  { name: "System Errors",    href: "/errors",        icon: AlertTriangle },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
