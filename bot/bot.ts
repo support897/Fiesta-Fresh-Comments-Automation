@@ -8,9 +8,7 @@ import * as dotenv from 'dotenv';
 import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
-import { pipeline, cos_sim } from '@xenova/transformers';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import Groq from 'groq-sdk';
 import nodemailer from 'nodemailer';
 
 async function sendAlertEmail(subject: string, text: string) {
@@ -650,45 +648,6 @@ async function extractFacebookPostId(postElement: Locator): Promise<string | nul
     return postId;
 }
 
-/**
- * Extracts a real Facebook Post ID from a post-message element by walking up
- * ancestor containers (permalink links and data-ft live on containers, not the
- * message div itself).
- */
-async function extractFacebookPostIdFromMessage(message: any): Promise<string | null> {
-    try {
-        return await message.evaluate((el: HTMLElement) => {
-            let cur: HTMLElement | null = el;
-            for (let i = 0; cur && i < 10; i++) {
-                const permalink = cur.querySelector('a[href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[aria-label*="Time"], a[aria-label*="Date"]');
-                if (permalink) {
-                    const href = permalink.getAttribute('href') || '';
-                    const m1 = href.match(/story_fbid=(\d+)/);
-                    if (m1 && m1[1]) return m1[1];
-                    const m2 = href.match(/\/posts\/(\d+)/);
-                    if (m2 && m2[1]) return m2[1];
-                    const m3 = href.match(/\/permalink\/(\d+)/);
-                    if (m3 && m3[1]) return m3[1];
-                    const m4 = href.match(/multi_permalinks=(\d+)/);
-                    if (m4 && m4[1]) return m4[1];
-                }
-                const ft = cur.querySelector('[data-ft]');
-                if (ft) {
-                    try {
-                        const f = JSON.parse(ft.getAttribute('data-ft') || '');
-                        if (f.fb_id) return String(f.fb_id);
-                        if (f.story_fbid) return String(f.story_fbid);
-                    } catch { /* ignore */ }
-                }
-                cur = cur.parentElement;
-            }
-            return null;
-        });
-    } catch (e: any) {
-        console.log(`    [PostID] extraction failed: ${e.message.slice(0, 80)}`);
-        return null;
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ZERO-API KEYWORD ENGINE v3
@@ -1089,37 +1048,6 @@ async function closeOverlays(page: any) {
     ]);
 }
 
-/**
- * Extract commenter name from post element
- */
-async function extractCommenterName(postElement: any): Promise<string> {
-    try {
-        // Try multiple selectors for name extraction
-        const nameSelectors = [
-            'h4', 
-            'strong a', 
-            'a[role="link"] span',
-            '[data-ad-preview="message"] strong'
-        ];
-        
-        for (const selector of nameSelectors) {
-            try {
-                const nameEl = postElement.locator(selector).first();
-                if (await nameEl.isVisible({ timeout: 1000 })) {
-                    const name = await nameEl.innerText();
-                    if (name && name.length > 0 && name.length < 50) {
-                        return name.trim().split(' ')[0]; // First name only
-                    }
-                }
-            } catch (e) {
-                continue;
-            }
-        }
-    } catch (e) {
-        console.log("⚠️ Could not extract commenter name");
-    }
-    return 'there'; // Fallback
-}
 
 /**
  * High-precision zero-API classifier.
@@ -1261,7 +1189,7 @@ async function captureProof(page: any, fileName: string) {
         const screenshot = await page.screenshot({ fullPage: false, timeout: 8000 });
         const filePath = `proofs/${Date.now()}_${fileName}.png`;
         
-        const { data, error } = await supabase.storage
+        const { error } = await supabase.storage
             .from('bot-screenshots')
             .upload(filePath, screenshot, { contentType: 'image/png' });
 
@@ -1334,7 +1262,7 @@ Post text to evaluate:
  * PROXY_SERVER=socks5://127.0.0.1:1080) is the only reliable fix, so EVERY
  * browser the bot opens must go through it — including the account-3 booster.
  */
-function resolveProxy(): { server: string; username?: string | undefined; password?: string | undefined } | null {
+function resolveProxy(): { server: string; username?: string; password?: string } | null {
     const proxyServer = process.env.PROXY_SERVER;
     if (!proxyServer) return null;
     let server = proxyServer;
@@ -1344,6 +1272,7 @@ function resolveProxy(): { server: string; username?: string | undefined; passwo
     // so always hand Playwright a bare server plus separate username/password fields.
     if (server.includes('@')) {
         const [scheme, rest] = server.split('://');
+        if (!scheme || !rest) return { server };
         const at = rest.lastIndexOf('@');
         const creds = rest.slice(0, at);
         const host = rest.slice(at + 1);
@@ -1402,7 +1331,9 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         if (boosterProxy) console.log(`🌐 Booster using proxy: ${boosterProxy.server} (user ${boosterProxy.username ?? "none"})`);
         else console.warn("⚠️ Booster running WITHOUT a proxy — Facebook usually strips datacenter sessions.");
         const boosterBrowser = await chromium.launch({
-            headless: true,
+            // Match the main bot: headless Chromium is trivially fingerprinted
+            // by Facebook. The service already provides an X display via xvfb-run.
+            headless: process.env.HEADLESS !== 'false',
             args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
             ...(boosterProxy ? { proxy: boosterProxy } : {}),
         });
@@ -1573,6 +1504,12 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
                 running: isRunning,
                 interval_seconds: SCAN_INTERVAL / 1000,
                 logins: loginState,
+                accounts: loadAccountRules().map(r => ({
+                    label: r.label, email: r.email, role: r.role,
+                    template: r.template,
+                    maxCommentsPerDay: r.maxCommentsPerDay,
+                    minMinutesBetweenComments: r.minMinutesBetweenComments,
+                })),
                 ...extra,
             }],
             updated_at: new Date(),
@@ -1993,7 +1930,6 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
         // Login check
         const loginMarkers = page.locator('#email, [name="email"], #pass, [name="pass"]');
-        const homeMarkers = page.locator('[aria-label="Your profile"], [aria-label="Facebook"], [aria-label*="Home"]');
 
         const hasUsablePassword = !!fbPassword && fbPassword !== 'REPLACE_ME';
 
@@ -2002,27 +1938,13 @@ async function runBot(account: FbAccount): Promise<boolean> {
         } else if (await loginMarkers.first().isVisible() && !passwordAttemptAllowed(fbEmail)) {
             console.warn(`🔒 Login screen shown for ${fbEmail} but password login is backed off after a recent failure.`);
         } else if (await loginMarkers.first().isVisible()) {
-            console.log("🔒 Login screen detected. Logging in...");
-            await humanType(page, '[name="email"]', fbEmail);
-            await randomDelay(800, 1500);
-            await humanType(page, '[name="pass"]', fbPassword!);
-            await page.keyboard.press('Enter');
-            await randomDelay(1000, 2000);
-            await page.click('button[name="login"], [aria-label="Log in"], [aria-label="Log In"], input[type="submit"]').catch(() => null);
-            
-            console.log("⏳ Waiting for landing page...");
-            await completeTwoFactor(page, account.totpSecret, fbEmail);
-            await homeMarkers.first().waitFor({ state: 'visible', timeout: 30000 }).catch(() => console.log("⚠️ Slow login or 2FA?"));
-            await randomDelay(3000, 5000);
-
-            // Save session
-            const cookies = await context.cookies();
-            if (cookies.some((c: any) => c.name === 'c_user' && c.value)) {
-                clearPasswordAttempt(fbEmail);
-            } else {
-                recordPasswordAttempt(fbEmail);
-            }
-            await saveSessionCookies(fbEmail, cookies);
+            // Login form is up, but do NOT log in here. There used to be two
+            // password-login implementations in this function and both ran in
+            // the same cycle, so every cycle spent two password attempts and
+            // hit the back-off / checkpoint twice as fast. The verified login
+            // path below (cookies -> password -> 2FA -> c_user proof) is the
+            // single owner of logging in.
+            console.log("🔒 Login screen detected — handing over to the verified login path.");
         }
 
         // Verify login — we cannot rely on the home-feed markers because the
