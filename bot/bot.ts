@@ -202,7 +202,8 @@ async function checkAndSendDailyReport() {
         const currentHour = parseInt(now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
         const todayStr = now.toLocaleDateString('en-US', { timeZone: 'Australia/Brisbane' });
 
-        if (currentHour === 18 && lastDailyReportDate !== todayStr) {
+        // >= 18 so a restart or a missed 18:00 tick still delivers today's report.
+        if (currentHour >= 18 && lastDailyReportDate !== todayStr) {
             lastDailyReportDate = todayStr;
             try {
                 fs.writeFileSync(reportFilePath, todayStr, 'utf8');
@@ -1053,9 +1054,28 @@ async function closeOverlays(page: any) {
  * High-precision zero-API classifier.
  * Returns 'approve' (comment), 'reject' (ignore), or 'unsure' (LLM if available).
  */
+// Fingerprints of our own posts / ad copy / comment template.
+const OWN_AD_MARKERS = [
+    'fiesta fresh',
+    'fiestafresh',
+    'fiestafreshcleaning',
+    '200% happiness guarantee',
+    '200 % happiness guarantee',
+    'happiness guarantee',
+    'only cleaning company on the gold coast offering this',
+];
+
 function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
     const text = normalizeForMatch(postText);
     if (!text || text.length < 12) return 'reject';
+
+    // 0. Never comment on our own advertising. The bot commented on a Fiesta
+    //    Fresh promo post once because our own ad copy is full of service keywords.
+    const ownAd = firstMatch(text, OWN_AD_MARKERS);
+    if (ownAd) {
+        console.log(`❌ Rejected — this is our own Fiesta Fresh post: "${ownAd}"`);
+        return 'reject';
+    }
 
     // 1. Disqualifiers win — competitor ads and job posts look superficially
     //    identical to leads, so they are checked before anything else.
@@ -2281,6 +2301,21 @@ async function runBot(account: FbAccount): Promise<boolean> {
                             await page.keyboard.press('Enter');
 
                             const proof = await captureCommentPermalink(page, postUrl);
+                            if (!proof.verified) {
+                                // The comment never appeared. Record it honestly and do not
+                                // fire the booster reply on a post we did not comment on.
+                                console.warn(`⚠️ Comment NOT confirmed for lead ${lead.post_id} — logged unverified.`);
+                                await supabase.from('replies_log').insert({
+                                    post_id: lead.post_id,
+                                    group_url: lead.group_url,
+                                    comment_id: `unverified_${Date.now()}`,
+                                    user_profile_id: fbEmail,
+                                    replied_at: new Date()
+                                });
+                                await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
+                                await coolDown('next lead');
+                                continue;
+                            }
                             const { error: replyErr } = await supabase.from('replies_log').insert({
                                 post_id: lead.post_id,
                                 group_url: lead.group_url,
@@ -2474,22 +2509,51 @@ async function runBot(account: FbAccount): Promise<boolean> {
                     }
                     
                     console.log("⚡ Auto-accepted lead! Attempting immediate comment...");
-                    const commentBox = page.locator(
+                    // The composer mounts late on a cold/proxied VPS, so poll and
+                    // re-click the placeholder like the group path does.
+                    const commentPlaceholder = page.locator(
+                        '[aria-label*="Write a public comment" i], ' +
                         '[aria-label*="Write a comment" i], ' +
-                        '[aria-label*="comment" i], ' +
-                        '[role="textbox"], ' +
+                        '[aria-label*="Leave a comment" i], ' +
+                        '[aria-placeholder*="comment" i], ' +
                         '[data-lexical-editor], ' +
+                        '[contenteditable]'
+                    ).first();
+                    const commentBox = page.locator(
+                        '[contenteditable="true"][aria-label*="comment" i], ' +
+                        '[role="textbox"][aria-label*="comment" i], ' +
                         '[contenteditable="true"]'
                     ).first();
-                    
-                    if (await commentBox.isVisible({ timeout: 5000 })) {
+
+                    let notifInputReady = false;
+                    for (let attempt = 1; attempt <= 9 && !notifInputReady; attempt++) {
+                        await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
+                        try { await commentBox.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
+                        notifInputReady = await commentBox.isVisible({ timeout: 1000 }).catch(() => false);
+                        if (!notifInputReady) {
+                            console.log(`📍 Comment composer not up yet (attempt ${attempt}/9)…`);
+                            await page.mouse.wheel(0, 400).catch(() => {});
+                            await new Promise(r => setTimeout(r, 1500));
+                        }
+                    }
+
+                    if (notifInputReady) {
                         await commentBox.click({ force: true }).catch(() => {});
                         await typeComment(page, templateText);
                         await page.keyboard.press('Enter');
-                        console.log(`✅ Direct comment posted on notification post ${postID}!`);
-                        
+
+                        // NEVER claim success on a keypress alone. Confirm the comment is
+                        // actually rendered, and store its real permalink as proof.
+                        const proof = await captureCommentPermalink(page, url);
+                        if (!proof.verified) {
+                            console.warn(`⚠️ Comment NOT confirmed on notification post ${postID} — logged unverified, booster reply skipped.`);
+                            await supabase.from('leads').insert({ post_id: postID, group_url: url, post_text: postText, status: 'failed' });
+                            await supabase.from('replies_log').insert({ post_id: postID, group_url: url, comment_id: `unverified_${Date.now()}`, user_profile_id: fbEmail, replied_at: new Date() });
+                            continue;
+                        }
+                        console.log(`✅ Direct comment CONFIRMED on notification post ${postID}: ${proof.url.slice(0, 110)}`);
                         await supabase.from('leads').insert({ post_id: postID, group_url: url, post_text: postText, status: 'posted' });
-                        await supabase.from('replies_log').insert({ post_id: postID, group_url: url, comment_id: `comment_${Date.now()}`, replied_at: new Date() });
+                        await supabase.from('replies_log').insert({ post_id: postID, group_url: url, comment_id: proof.url, user_profile_id: fbEmail, replied_at: new Date() });
                         await coolDown('Account 3 booster comment');
                         await postWebsiteUrlBoosterReply(url, postID);
                         await coolDown('next notification lead');
