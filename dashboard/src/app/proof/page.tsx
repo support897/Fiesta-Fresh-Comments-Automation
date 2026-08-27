@@ -34,6 +34,8 @@ export default function URLGallery() {
         .select("*")
         // Legacy DRY_RUN rows are not real comments — hide them.
         .not("comment_id", "like", "dryrun_%")
+        .not("comment_id", "like", "unverified_%")
+        .not("comment_id", "like", "comment_%")
         .order("replied_at", { ascending: false });
 
       if (error) throw error;
