@@ -55,7 +55,10 @@ type Health = {
 };
 
 type ProfileStatus = {
-  connected: boolean;
+  /** true = a login was verified, false = login failed, null = not reported yet */
+  loginOk: boolean | null;
+  loginAt: string | null;
+  loginReason: string | null;
   updatedAt: string | null;
   cookieCount: number;
 };
@@ -112,8 +115,8 @@ function proofLink(commentId: string | null, groupUrl: string, postId: string): 
 }
 
 const PROFILES = [
-  { name: "Ilse",            key: "ilse2taylor@gmail.com",            initial: "I", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
-  { name: "Taylor",          key: "projects.reports.ilse@gmail.com",  initial: "T", sub: "50% Main Reply",  color: "bg-slate-50 text-slate-700" },
+  { name: "Ilse",            key: "projects.reports.ilse@gmail.com",  initial: "I", sub: "Main reply",     color: "bg-slate-50 text-slate-700" },
+  { name: "Taylor",          key: "ilse2taylor@gmail.com",            initial: "T", sub: "Main reply",     color: "bg-slate-50 text-slate-700" },
   { name: "Website Booster", key: "account3",                         initial: "W", sub: "100% URL drop",   color: "bg-blue-50 text-blue-600"   },
 ];
 
@@ -208,10 +211,21 @@ export default function DashboardPage() {
         const cookies = Array.isArray(row.cookies) ? row.cookies : [];
         if (row.user_email === HEARTBEAT_KEY) {
           beacon = { payload: cookies[0] ?? null, updated_at: row.updated_at };
-          continue;
         }
+      }
+
+      // A cookie row proves nothing — Facebook can invalidate a session while the
+      // stored jar stays intact. The bot publishes the real outcome of its last
+      // login attempt per account in the heartbeat; that is what we trust here.
+      const logins = (beacon?.payload?.logins ?? {}) as Record<string, { ok?: boolean; at?: string; reason?: string }>;
+      for (const row of sessionRows ?? []) {
+        if (row.user_email === HEARTBEAT_KEY) continue;
+        const cookies = Array.isArray(row.cookies) ? row.cookies : [];
+        const reported = logins[row.user_email];
         statusMap[row.user_email] = {
-          connected: cookies.length > 0,
+          loginOk: typeof reported?.ok === "boolean" ? reported.ok : (cookies.length > 0 ? null : false),
+          loginAt: reported?.at ?? null,
+          loginReason: reported?.reason ?? null,
           updatedAt: row.updated_at,
           cookieCount: cookies.length,
         };
@@ -345,7 +359,7 @@ export default function DashboardPage() {
           </div>
           <div>
             <div className="text-3xl font-black text-slate-900">
-              {PROFILES.filter((p) => profileStatus[p.key]?.connected).length} / {PROFILES.length}
+              {PROFILES.filter((p) => profileStatus[p.key]?.loginOk === true).length} / {PROFILES.length}
             </div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Profiles</div>
           </div>
@@ -377,17 +391,28 @@ export default function DashboardPage() {
                 <div>
                   <h4 className="text-sm font-bold text-slate-800">{p.name}</h4>
                   <p className="text-[10px] text-slate-400">
-                    {p.sub} · updated {agoLabel(profileStatus[p.key]?.updatedAt ?? null)}
+                    {p.sub} · cookies {agoLabel(profileStatus[p.key]?.updatedAt ?? null)}
                   </p>
+                  {profileStatus[p.key]?.loginOk === false && profileStatus[p.key]?.loginReason && (
+                    <p className="text-[10px] text-red-500 font-medium max-w-[190px] truncate" title={profileStatus[p.key]?.loginReason ?? ""}>
+                      {profileStatus[p.key]?.loginReason}
+                    </p>
+                  )}
                 </div>
               </div>
               <span className={cn(
                 "px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border",
-                profileStatus[p.key]?.connected
+                profileStatus[p.key]?.loginOk === true
                   ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-                  : "bg-red-50 text-red-600 border-red-100"
+                  : profileStatus[p.key]?.loginOk === false
+                    ? "bg-red-50 text-red-600 border-red-100"
+                    : "bg-amber-50 text-amber-700 border-amber-100"
               )}>
-                {profileStatus[p.key]?.connected ? "● Connected" : "● Session down"}
+                {profileStatus[p.key]?.loginOk === true
+                  ? "● Logged in"
+                  : profileStatus[p.key]?.loginOk === false
+                    ? "● Login failing"
+                    : "● Not verified"}
               </span>
             </div>
           ))}
