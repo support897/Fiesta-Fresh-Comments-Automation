@@ -453,6 +453,137 @@ const ACCOUNTS = loadAccounts();
 let currentAccountIndex = 0;
 let sessionAlertSent = false;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-ACCOUNT TEMPLATES + POSTING RULES
+//
+// accounts.config.json sits next to this file on the VPS and is re-read every
+// 60s, so the wording and the throttles can be changed without a deploy or a
+// restart. Every account owns its own template; the reply text is no longer
+// hardcoded in two places in the flow.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AccountRule {
+    key: string;
+    email: string;
+    label: string;
+    role: 'main_reply' | 'url_drop';
+    enabled: boolean;
+    share: number;
+    maxCommentsPerDay: number;
+    minMinutesBetweenComments: number;
+    template: string;
+}
+
+const ACCOUNT_CONFIG_FILE = path.join(__dirname, 'accounts.config.json');
+const ACCOUNT_CONFIG_TTL_MS = 60000;
+let accountRulesCache: { at: number; rules: AccountRule[] } | null = null;
+
+/** Last-resort template if the config file is missing or unreadable. */
+const DEFAULT_MAIN_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
+
+We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
+
+And here is what makes us a little different from everyone else… we offer a 200% Happiness Guarantee on every single clean we do. That means if anything is not perfect we come back and fix it for FREE. No questions asked. We are the only cleaning company on the Gold Coast offering this and we stand behind it completely. 🙌
+
+We are not a big franchise. We are your neighbours. A real local team that shows up, works hard and truly cares about leaving your space better than we found it. Every single time. 💙
+
+You can check out everything we offer, read our reviews and even book in 60 seconds right here 👉 fiestafreshcleaning.com/book
+
+We will also send you a DM just in case you have any questions. Make sure to check your message requests! We cannot wait to help you out. 🎉`;
+
+const DEFAULT_URL_DROP = 'https://www.fiestafreshcleaning.com/';
+
+function loadAccountRules(): AccountRule[] {
+    if (accountRulesCache && Date.now() - accountRulesCache.at < ACCOUNT_CONFIG_TTL_MS) {
+        return accountRulesCache.rules;
+    }
+    let rules: AccountRule[] = [];
+    try {
+        const parsed = JSON.parse(fs.readFileSync(ACCOUNT_CONFIG_FILE, 'utf8'));
+        rules = (parsed.accounts || [])
+            .filter((a: any) => a && a.email && a.template)
+            .map((a: any) => ({
+                key: String(a.key || a.email),
+                email: String(a.email),
+                label: String(a.label || a.email),
+                role: a.role === 'url_drop' ? 'url_drop' : 'main_reply',
+                enabled: a.enabled !== false,
+                share: Number.isFinite(a.share) ? Number(a.share) : 50,
+                maxCommentsPerDay: Number.isFinite(a.maxCommentsPerDay) ? Number(a.maxCommentsPerDay) : 12,
+                minMinutesBetweenComments: Number.isFinite(a.minMinutesBetweenComments) ? Number(a.minMinutesBetweenComments) : 20,
+                template: String(a.template),
+            }));
+        if (!accountRulesCache) {
+            console.log(`📋 Loaded ${rules.length} account rule(s) from accounts.config.json: ${rules.map(r => `${r.label}[${r.role}]`).join(', ')}`);
+        }
+    } catch (e: any) {
+        if (!accountRulesCache) console.warn(`⚠️ accounts.config.json unreadable (${e.message}) — using built-in template for every account.`);
+        rules = [];
+    }
+    accountRulesCache = { at: Date.now(), rules };
+    return rules;
+}
+
+function ruleFor(email: string): AccountRule | null {
+    const target = (email || '').toLowerCase();
+    return loadAccountRules().find(r => r.email.toLowerCase() === target) ?? null;
+}
+
+/** The reply text this account should post. */
+function templateFor(email: string): string {
+    const rule = ruleFor(email);
+    if (rule?.template) return rule.template;
+    console.warn(`⚠️ No template configured for ${email} — using the built-in default.`);
+    return DEFAULT_MAIN_TEMPLATE;
+}
+
+/** The short website comment for the booster account. */
+function urlDropTemplate(): string {
+    const rule = loadAccountRules().find(r => r.role === 'url_drop' && r.enabled);
+    return rule?.template || DEFAULT_URL_DROP;
+}
+
+/**
+ * Per-account throttle, counted from replies_log so it survives restarts.
+ * Protects the accounts from the burst pattern that gets them banned:
+ * a daily ceiling plus a minimum gap between two comments by the same account.
+ */
+async function accountMayComment(email: string, label?: string): Promise<boolean> {
+    const rule = ruleFor(email);
+    if (!rule) return true;
+    if (!rule.enabled) {
+        console.log(`⏸️ ${rule.label} is disabled in accounts.config.json — skipping.`);
+        return false;
+    }
+    try {
+        const stamp = label || email;
+        const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+        const { data } = await supabase
+            .from('replies_log')
+            .select('replied_at, comment_id')
+            .eq('user_profile_id', stamp)
+            .gte('replied_at', since)
+            .order('replied_at', { ascending: false });
+        const rows = realReplies(data);
+        if (rows.length >= rule.maxCommentsPerDay) {
+            console.log(`🛑 ${rule.label} hit its daily cap (${rows.length}/${rule.maxCommentsPerDay} in 24h) — holding off.`);
+            return false;
+        }
+        const last = rows[0]?.replied_at ? new Date(rows[0].replied_at).getTime() : 0;
+        if (last) {
+            const mins = (Date.now() - last) / 60000;
+            if (mins < rule.minMinutesBetweenComments) {
+                console.log(`⏳ ${rule.label} commented ${mins.toFixed(0)} min ago (min gap ${rule.minMinutesBetweenComments} min) — holding off.`);
+                return false;
+            }
+        }
+        console.log(`✅ ${rule.label} clear to comment (${rows.length}/${rule.maxCommentsPerDay} today).`);
+    } catch (e: any) {
+        console.warn(`⚠️ Could not check throttle for ${email}: ${e.message} — allowing.`);
+    }
+    return true;
+}
+
 function nextAccount(): FbAccount | null {
     if (ACCOUNTS.length === 0) return null;
     const account = ACCOUNTS[currentAccountIndex % ACCOUNTS.length];
@@ -1229,7 +1360,13 @@ function resolveProxy(): { server: string; username?: string | undefined; passwo
 }
 
 async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
-    console.log("🌐 Triggering Account 3 Website URL Booster comment (100% Coverage)...");
+    console.log("🌐 Triggering Account 3 Website URL Booster comment...");
+    const boosterRule = loadAccountRules().find(r => r.role === 'url_drop');
+    if (boosterRule && !boosterRule.enabled) {
+        console.log("⏸️ Website Booster disabled in accounts.config.json — skipping URL drop.");
+        return;
+    }
+    if (boosterRule && !(await accountMayComment(boosterRule.email, 'Website Booster'))) return;
     try {
         const { data: session } = await supabase
             .from('sessions')
@@ -1314,7 +1451,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         await boosterPage.goto(targetUrl, { waitUntil: 'commit', timeout: 45000 });
         await new Promise(r => setTimeout(r, 500));
 
-        const boosterCommentText = "https://www.fiestafreshcleaning.com/";
+        const boosterCommentText = urlDropTemplate();
 
         const commentPlaceholder = boosterPage.locator(
             '[aria-label*="Write a comment" i], ' +
@@ -2062,26 +2199,21 @@ async function runBot(account: FbAccount): Promise<boolean> {
             return true;
         });
 
-        const FIXED_REPLY_TEMPLATE = `Hi! 💙 We would absolutely love to help you out!
-
-We are Fiesta Fresh Cleaning, a local Gold Coast team that genuinely cares about every single home and space we walk into. Fully insured, police-checked and proudly serving the Gold Coast community 🏡✨
-
-And here is what makes us a little different from everyone else… we offer a 200% Happiness Guarantee on every single clean we do. That means if anything is not perfect we come back and fix it for FREE. No questions asked. We are the only cleaning company on the Gold Coast offering this and we stand behind it completely. 🙌
-
-We are not a big franchise. We are your neighbours. A real local team that shows up, works hard and truly cares about leaving your space better than we found it. Every single time. 💙
-
-You can check out everything we offer, read our reviews and even book in 60 seconds right here 👉 fiestafreshcleaning.com/book
-
-We will also send you a DM just in case you have any questions. Make sure to check your message requests! We cannot wait to help you out. 🎉`;
+        // Reply text now comes from accounts.config.json via templateFor(email)
+        // so each account posts its own wording (see PER-ACCOUNT TEMPLATES above).
 
         if (approvedLeads && approvedLeads.length > 0) {
             console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
             for (const lead of approvedLeads) {
                 try {
                     console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
-                    
-                    // Always use exact fixed reply template - zero variations
-                    const templateText = FIXED_REPLY_TEMPLATE;
+
+                    // Per-account rules (accounts.config.json): daily cap and a
+                    // minimum gap between comments. Bursts are what gets these
+                    // accounts banned, so a blocked account simply waits.
+                    if (!DRY_RUN && !(await accountMayComment(fbEmail))) break;
+
+                    const templateText = templateFor(fbEmail);
                     
                     if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
                         console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
@@ -2344,7 +2476,8 @@ We will also send you a DM just in case you have any questions. Make sure to che
                 
                 if (isLead) {
                     console.log(`🎯 MATCH FOUND (Notification): ${postID}`);
-                    const templateText = FIXED_REPLY_TEMPLATE;
+                    if (!DRY_RUN && !(await accountMayComment(fbEmail))) continue;
+                    const templateText = templateFor(fbEmail);
                     
                     if (DRY_RUN) {
                         console.log(`[DRY RUN] Would comment on lead (${postID}): ${postText.substring(0, 60)}...`);
