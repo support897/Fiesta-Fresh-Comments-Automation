@@ -608,6 +608,27 @@ async function accountMayComment(email: string, label?: string): Promise<boolean
  * constraint (someone else owns it). Claims older than CLAIM_TTL_MINUTES are
  * treated as abandoned so a crashed commenter cannot park a lead forever.
  */
+/**
+ * Leads whose live post text failed re-validation. The anon key cannot UPDATE
+ * `leads`, so a rejected row keeps coming back every poll — and re-opening two
+ * dead posts cost ~3 minutes of every cycle. Remember them on disk instead.
+ */
+const rejectedLeadsFile = path.join(__dirname, 'rejected_leads.txt');
+const liveRejectedLeads = new Set<string>();
+try {
+    if (fs.existsSync(rejectedLeadsFile)) {
+        for (const line of fs.readFileSync(rejectedLeadsFile, 'utf8').split('\n')) {
+            if (line.trim()) liveRejectedLeads.add(line.trim());
+        }
+    }
+} catch { /* start with an empty memory */ }
+
+function rememberRejectedLead(postId: string) {
+    if (liveRejectedLeads.has(postId)) return;
+    liveRejectedLeads.add(postId);
+    try { fs.appendFileSync(rejectedLeadsFile, postId + '\n'); } catch { /* memory only */ }
+}
+
 const CLAIM_TTL_MS = parseInt(process.env.CLAIM_TTL_MINUTES || '10') * 60 * 1000;
 
 async function claimLead(postId: string, fbEmail: string): Promise<boolean> {
@@ -1637,11 +1658,119 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
  * of minutes so the next cycle's PHASE 1 actions the fresh leads immediately.
  */
 let newLeadsThisCycle = 0;
+/** Feed-first discovery; set FEED_MODE=0 to fall back to per-group sweeping. */
+const FEED_MODE = process.env.FEED_MODE !== '0';
+let lastSweepDate = '';
 let groupCursor = 0;
 const groupCursorFile = path.join(__dirname, 'group_cursor.txt');
 try {
     if (fs.existsSync(groupCursorFile)) groupCursor = parseInt(fs.readFileSync(groupCursorFile, 'utf8').trim()) || 0;
 } catch { /* ignore */ }
+
+
+/**
+ * PRIMARY DISCOVERY — the combined groups feed.
+ *
+ * Walking 104 group pages one at a time took 3-4 hours a lap over the home
+ * exit node, so a cleaning request could sit unanswered for most of a day.
+ * facebook.com/groups/feed/ streams recent posts from every joined group in a
+ * single page, which turns a 3-hour lap into a ~2-minute poll. Posts are
+ * classified and commented on immediately, so discovery-to-comment is under a
+ * minute. The per-group sweep still runs, but only as a nightly backstop for
+ * anything Facebook's ranking hid from this feed.
+ */
+async function scanGroupsFeed(page: any, fbEmail?: string) {
+    const scrolls = parseInt(process.env.FEED_SCROLLS || '6');
+    console.log(`\ud83d\udcf0 FEED: polling the combined groups feed (${scrolls} scrolls)...`);
+
+    const ok = await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 3);
+    if (!ok) { console.warn('   \u23ed\ufe0f Groups feed would not load through the proxy this pass.'); return; }
+    await randomDelay(2500, 5000);
+
+    // The feed hydrates slowly over the home exit node: the first poll read 0
+    // posts because the articles had not mounted inside the old 20s wait. Poll
+    // for real content, nudging the page, before giving up.
+    let mounted = 0;
+    for (let wait = 0; wait < 12 && mounted === 0; wait++) {
+        mounted = await page.locator('[role="article"]').count().catch(() => 0);
+        if (mounted === 0) {
+            await page.mouse.wheel(0, 600).catch(() => {});
+            await new Promise(r => setTimeout(r, 5000));
+        }
+    }
+    if (mounted === 0) {
+        const u = page.url();
+        const t = await page.title().catch(() => '?');
+        console.warn(`   \u26a0\ufe0f Feed rendered no posts (url: ${u.slice(0, 70)} | title: ${t.slice(0, 40)}).`);
+        return;
+    }
+    console.log(`   \ud83d\udcf0 Feed mounted with ${mounted} post(s) visible; scrolling for more.`);
+
+    // Anything already queued or already answered is not news.
+    const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
+    const seen = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
+    const { data: knownLeads } = await supabase.from('leads').select('post_id');
+    for (const l of knownLeads || []) seen.add(String(l.post_id));
+
+    let found = 0;
+    let scanned = 0;
+    for (let scroll = 0; scroll < scrolls; scroll++) {
+        const posts = page.locator('[role="article"]');
+        const count = Math.min(await posts.count().catch(() => 0), 30);
+        for (let i = 0; i < count; i++) {
+            const el = posts.nth(i);
+            const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+            if (!text || text.length < 25) continue;
+            scanned++;
+
+            const decision = quickKeywordFilter(text);
+            let isLead = decision === 'approve';
+            if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
+            if (!isLead) continue;
+
+            // Which group did this come from? The feed puts the group link in
+            // the post header; without it there is no permalink to comment on.
+            let groupUrl = '';
+            try {
+                const href = await el.locator('a[href*="/groups/"]').first().getAttribute('href', { timeout: 2000 });
+                const m = href?.match(/\/groups\/([^/?#]+)/);
+                if (m) groupUrl = `https://www.facebook.com/groups/${m[1]}`;
+            } catch { /* header link missing */ }
+            if (!groupUrl) { console.log('   \u26a0\ufe0f Feed post has no group link — skipping.'); continue; }
+
+            const postId = await extractFacebookPostId(el);
+            if (!postId) { console.log('   \u26a0\ufe0f Feed post has no permalink id — skipping.'); continue; }
+            if (seen.has(String(postId))) continue;
+            seen.add(String(postId));
+
+            console.log(`\ud83c\udfaf FEED LEAD ${postId} in ${groupUrl.slice(0, 60)} — queued as approved.`);
+            const { error } = await supabase.from('leads').insert({
+                post_id: postId,
+                group_url: groupUrl,
+                post_text: text.slice(0, 4000),
+                status: 'approved',
+            });
+            if (error) { console.log(`   \u26a0\ufe0f lead insert: ${error.message}`); continue; }
+            newLeadsThisCycle++;
+            found++;
+
+            // Comment on it right now, while it is minutes old.
+            if (fbEmail && BOT_ROLE !== 'scout') {
+                try {
+                    await executeApprovedLeads(page, fbEmail);
+                } catch (e: any) {
+                    console.error(`   \u26a0\ufe0f Immediate comment pass failed: ${e.message?.slice(0, 120)}`);
+                }
+                // executeApprovedLeads navigates away; come back to the feed.
+                await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 2);
+                await randomDelay(2000, 4000);
+            }
+        }
+        await page.mouse.wheel(0, 1600).catch(() => {});
+        await randomDelay(1800, 4000);
+    }
+    console.log(`\ud83d\udcf0 FEED: ${scanned} post(s) read, ${found} new lead(s).`);
+}
 
 async function patrolGroups(page: any, fbEmail?: string) {
     let executedUpTo = 0;
@@ -1933,6 +2062,7 @@ async function executeApprovedLeads(page: any, fbEmail: string) {
         const repliedPostIds = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
 
         const approvedLeads = (rawLeads || []).filter(lead => {
+            if (liveRejectedLeads.has(String(lead.post_id))) return false; // already judged live and rejected
             const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
             if (isAlreadyReplied) {
                 console.log(`⏭️ Lead ${lead.post_id} already has a logged reply in replies_log. Skipping execution.`);
@@ -2058,6 +2188,7 @@ async function executeApprovedLeads(page: any, fbEmail: string) {
                             const liveVerdict = quickKeywordFilter(liveText || '');
                             if (liveVerdict !== 'approve' || looksLikePageChrome(liveText || '')) {
                                 console.log(`🛑 Lead ${lead.post_id}: live post text does not qualify (${liveVerdict}) — skipping for good.`);
+                                rememberRejectedLead(String(lead.post_id));
                                 await supabase.from('leads').insert({ post_id: lead.post_id, group_url: lead.group_url, post_text: (liveText || '').slice(0, 500), status: 'rejected' });
                                 continue;
                             }
@@ -2329,7 +2460,21 @@ async function runBot(account: FbAccount): Promise<boolean> {
         console.log("ℹ️ No proxy configured — connecting directly (verified working).");
     }
 
-    const context = await chromium.launchPersistentContext(userDataDir, contextOptions);
+    // A Chromium that was OOM-killed leaves SingletonLock/Cookie/Socket behind
+    // and the next launch blocks on them until it times out. Clear them first.
+    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        try { fs.rmSync(path.join(userDataDir, lock), { force: true, recursive: true }); } catch { /* nothing to clear */ }
+    }
+
+    let context: any;
+    try {
+        context = await chromium.launchPersistentContext(userDataDir, contextOptions);
+    } catch (launchErr: any) {
+        console.warn(`⚠️ Browser launch failed (${launchErr.message?.slice(0, 80)}) — killing strays and retrying once.`);
+        try { require('child_process').execSync('pkill -f "chrome.*' + userDataDir.replace(/[^\w/.-]/g, '') + '" || true'); } catch { /* best effort */ }
+        await new Promise(r => setTimeout(r, 10000));
+        context = await chromium.launchPersistentContext(userDataDir, contextOptions);
+    }
 
     // Block heavy downloads — we only scrape text. Cuts memory and network bandwidth massively.
     await context.route('**/*', (route: any) => {
@@ -2737,6 +2882,20 @@ async function runBot(account: FbAccount): Promise<boolean> {
                     console.error(`⚠️ Commenter pass failed: ${e.message?.slice(0, 120)}`);
                 }
             }
+        } else if (FEED_MODE) {
+            await scanGroupsFeed(page, fbEmail);
+            // The per-group sweep is the backstop: Facebook ranks the combined
+            // feed, so it can hide posts. One full lap a night catches those
+            // while nothing else is competing for the box.
+            const hourBne = parseInt(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
+            const sweepHour = parseInt(process.env.NIGHTLY_SWEEP_HOUR || '1');
+            const today = new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane' });
+            if (hourBne === sweepHour && lastSweepDate !== today) {
+                lastSweepDate = today;
+                console.log(`\ud83c\udf19 Nightly backstop sweep of all groups (${today})...`);
+                await patrolGroups(page, fbEmail);
+                await searchGroupsForLeads(page);
+            }
         } else {
             await patrolGroups(page, fbEmail);
             await searchGroupsForLeads(page);
@@ -2755,12 +2914,14 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
 // **MAIN LOOP - Run continuously**
 let lastCycleTime = 'never';
+let lastCycleSucceeded = true;
 let cycleCount = 0;
 let isRunning = false;
 
 async function main() {
     console.log("🚀 Fiesta Fresh Bot v2.0 Starting...");
     console.log(`Supabase: ${supabaseUrl}`);
+    console.log(`Discovery: ${FEED_MODE ? 'combined groups feed (sweep = nightly backstop)' : 'per-group sweep'}`);
     console.log(`Role: ${BOT_ROLE}${BOT_ACCOUNT ? ` (pinned to ${BOT_ACCOUNT})` : ''} | accounts in rotation: ${ACCOUNTS.map(a => a.email).join(', ') || 'none'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
     {
@@ -2836,6 +2997,7 @@ async function main() {
                     await randomDelay(3000, 5000);
                 }
             }
+            lastCycleSucceeded = success;
             if (!success) {
                 console.error("❌ All configured Facebook accounts failed to authenticate in this cycle.");
                 consecutiveAuthFailures++;
@@ -2907,6 +3069,20 @@ async function main() {
                 const quick = parseInt(process.env.FRESH_LEAD_REST_SECONDS || '120') * 1000;
                 console.log(`⚡ ${newLeadsThisCycle} fresh lead(s) found — short rest of ${Math.round(quick / 1000)}s, then commenting on them.`);
                 await sleep(quick);
+                continue;
+            }
+            if (!lastCycleSucceeded) {
+                // Nothing was scanned, so there is no reason to hand the box to
+                // cold-email for an hour. Back off briefly and try again.
+                const retry = parseInt(process.env.FAILED_CYCLE_RETRY_SECONDS || '180') * 1000;
+                console.log(`🔁 Cycle failed before it could scan — retrying in ${Math.round(retry / 1000)}s instead of the full rest.`);
+                await sleep(retry);
+                continue;
+            }
+            if (FEED_MODE) {
+                const poll = parseInt(process.env.FEED_POLL_SECONDS || '240') * 1000;
+                console.log(`🔄 Feed mode — next poll in ${Math.round(poll / 1000)}s.`);
+                await sleep(poll);
                 continue;
             }
             console.log(`🛌 Cycle done — resting ${Math.round(REST_MS / 60000)} min so cold-email gets the box.`);
