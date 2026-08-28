@@ -448,7 +448,21 @@ function loadAccounts(): FbAccount[] {
     return single;
 }
 
-const ACCOUNTS = loadAccounts();
+/**
+ * BOT_ROLE lets the same file run as three different processes:
+ *   scout     — sweeps groups, never comments (finds work)
+ *   commenter — never sweeps, polls the queue and comments (does work)
+ *   all       — the original single-process behaviour (default)
+ * BOT_ACCOUNT pins a commenter to one Facebook account so each account gets
+ * its own browser instead of taking turns in one.
+ */
+const BOT_ROLE = (process.env.BOT_ROLE || 'all').toLowerCase();
+const BOT_ACCOUNT = (process.env.BOT_ACCOUNT || '').trim().toLowerCase();
+
+const ALL_ACCOUNTS = loadAccounts();
+const ACCOUNTS = BOT_ACCOUNT
+    ? ALL_ACCOUNTS.filter(a => String(a.email).toLowerCase() === BOT_ACCOUNT)
+    : ALL_ACCOUNTS;
 let currentAccountIndex = 0;
 let consecutiveAuthFailures = 0;
 let sessionAlertSent = false;
@@ -581,6 +595,38 @@ async function accountMayComment(email: string, label?: string): Promise<boolean
     } catch (e: any) {
         console.warn(`⚠️ Could not check throttle for ${email}: ${e.message} — allowing.`);
     }
+    return true;
+}
+
+/**
+ * Claim a lead before commenting on it.
+ *
+ * The anon key has no UPDATE grant on `leads` (verified: a PATCH returns zero
+ * rows), so the claim cannot live on the lead row. `sessions` has a unique
+ * user_email and does accept inserts, so a row named `claim:<post_id>` acts as
+ * a mutex — the insert either succeeds (we own the lead) or trips the unique
+ * constraint (someone else owns it). Claims older than CLAIM_TTL_MINUTES are
+ * treated as abandoned so a crashed commenter cannot park a lead forever.
+ */
+const CLAIM_TTL_MS = parseInt(process.env.CLAIM_TTL_MINUTES || '10') * 60 * 1000;
+
+async function claimLead(postId: string, fbEmail: string): Promise<boolean> {
+    if (BOT_ROLE === 'all' && !BOT_ACCOUNT) return true; // single process, nothing to race
+    const key = `claim:${postId}`;
+    const payload = { user_email: key, cookies: [{ by: fbEmail, at: Date.now() }] as any, updated_at: new Date() };
+    const { error } = await supabase.from('sessions').insert(payload);
+    if (!error) return true;
+
+    // Someone holds it. Take it over only if their claim has gone stale.
+    const { data: held } = await supabase.from('sessions').select('cookies, updated_at').eq('user_email', key).maybeSingle();
+    const heldAt = held?.updated_at ? new Date(held.updated_at).getTime() : 0;
+    if (heldAt && Date.now() - heldAt < CLAIM_TTL_MS) {
+        const owner = (held?.cookies as any)?.[0]?.by || 'another bot';
+        console.log(`\u23ed\ufe0f Lead ${postId} is claimed by ${owner} — leaving it.`);
+        return false;
+    }
+    await supabase.from('sessions').upsert(payload);
+    console.log(`\u267b\ufe0f Took over a stale claim on lead ${postId}.`);
     return true;
 }
 
@@ -1597,7 +1643,8 @@ try {
     if (fs.existsSync(groupCursorFile)) groupCursor = parseInt(fs.readFileSync(groupCursorFile, 'utf8').trim()) || 0;
 } catch { /* ignore */ }
 
-async function patrolGroups(page: any) {
+async function patrolGroups(page: any, fbEmail?: string) {
+    let executedUpTo = 0;
     const perCycle = parseInt(process.env.GROUPS_PER_CYCLE || '999');
     if (perCycle <= 0) { console.log("\u23ed\ufe0f Group patrol disabled (GROUPS_PER_CYCLE=0)."); return; }
 
@@ -1671,6 +1718,18 @@ async function patrolGroups(page: any) {
                 await randomDelay(1800, 4000);
             }
             await randomDelay(4000, 9000); // pace between groups
+
+            // Comment on anything this group just produced, immediately, rather
+            // than at the end of a multi-hour sweep.
+            if (fbEmail && BOT_ROLE !== 'scout' && newLeadsThisCycle > executedUpTo) {
+                console.log(`\u26a1 ${newLeadsThisCycle - executedUpTo} new lead(s) from this group — commenting now, mid-sweep.`);
+                executedUpTo = newLeadsThisCycle;
+                try {
+                    await executeApprovedLeads(page, fbEmail);
+                } catch (e: any) {
+                    console.error(`\u26a0\ufe0f Mid-sweep comment pass failed: ${e.message?.slice(0, 120)}`);
+                }
+            }
         } catch (e: any) {
             console.error(`\u26a0\ufe0f Patrol error on ${groupUrl.slice(0, 60)}: ${e.message?.slice(0, 100)}`);
         }
@@ -1853,6 +1912,342 @@ async function searchGroupsForLeads(page: any) {
         }
     }
     console.log(`\u2705 PHASE 3 search complete — ${found} new lead(s).`);
+}
+
+
+/**
+ * PHASE 1 — act on approved leads.
+ *
+ * Extracted from runBot so the group sweep can call it mid-sweep. A sweep of
+ * 104 groups takes hours over the home exit node; waiting for it to finish
+ * before commenting meant a cleaning request sat untouched for most of a day.
+ * Now the patrol calls this as soon as it finds something, and the per-account
+ * throttles in accounts.config.json do the pacing.
+ */
+async function executeApprovedLeads(page: any, fbEmail: string) {
+        // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
+        const { data: rawLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        
+        // Fetch replies_log to filter out already executed leads (RLS update proof)
+        const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
+        const repliedPostIds = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
+
+        const approvedLeads = (rawLeads || []).filter(lead => {
+            const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
+            if (isAlreadyReplied) {
+                console.log(`⏭️ Lead ${lead.post_id} already has a logged reply in replies_log. Skipping execution.`);
+                return false;
+            }
+            // Re-validate against the CURRENT classifier before commenting. The
+            // anon key cannot UPDATE leads (RLS is insert/select only), so old
+            // rows keep whatever status they were given by an older, looser
+            // filter — including competitor ads and recruitment posts. Without
+            // this guard the bot would comment on all of them.
+            const leadText = lead.post_text || '';
+
+            // Guard 1: rows captured by the old whole-page scrape hold Facebook's
+            // own navigation blob, not a request. Never comment on those.
+            if (looksLikePageChrome(leadText)) {
+                console.log(`🔎 Lead ${lead.post_id} stored page chrome — will re-read the real post before deciding.`);
+                (lead as any).__needsLiveCheck = true;
+                return true;
+            }
+
+            // Guard 2: some rows captured a COMMENT on the post ("Name · 3h … Reply
+            // Share") rather than the post itself. Acting on those meant replying
+            // under a competitor's advertisement because a commenter said
+            // "I need cleaner". The post is not the lead, so skip it.
+            if (/\bReply\b[\s|]*\bShare\b\s*$/i.test(leadText.trim())) {
+                console.log(`🔎 Lead ${lead.post_id} captured a comment, not the post — will re-read the real post before deciding.`);
+                (lead as any).__needsLiveCheck = true;
+                return true;
+            }
+
+            // Guard 3: age. A request from days ago is already served, and the
+            // queue still holds rows from before the scraper was fixed.
+            const createdAt = lead.created_at ? new Date(lead.created_at).getTime() : 0;
+            if (createdAt && Date.now() - createdAt > STALE_LEAD_MS) {
+                // These rows can never be cleared: the anon key has no UPDATE on
+                // `leads`, so they come back every cycle. Log each one once and
+                // then stay quiet instead of reprinting the same wall of text.
+                if (!loggedStaleLeads.has(String(lead.post_id))) {
+                    loggedStaleLeads.add(String(lead.post_id));
+                    const hrs = ((Date.now() - createdAt) / 3600000).toFixed(0);
+                    console.log(`🛑 Lead ${lead.post_id} is ${hrs}h old (limit ${STALE_LEAD_MS / 3600000}h) — skipping stale lead.`);
+                }
+                return false;
+            }
+
+            if ((lead as any).__needsLiveCheck) return true; // stored text is junk; judged live instead
+            const verdict = quickKeywordFilter(leadText);
+            if (verdict !== 'approve') {
+                console.log(`🛑 Lead ${lead.post_id} no longer passes the filter (${verdict}) — skipping stale approval.`);
+                return false;
+            }
+            return true;
+        });
+
+        // Reply text now comes from accounts.config.json via templateFor(email)
+        // so each account posts its own wording (see PER-ACCOUNT TEMPLATES above).
+
+        if (approvedLeads && approvedLeads.length > 0) {
+            console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
+            for (const lead of approvedLeads) {
+                try {
+                    console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
+
+                    // Per-account rules (accounts.config.json): daily cap and a
+                    // minimum gap between comments. Bursts are what gets these
+                    // accounts banned, so a blocked account simply waits.
+                    if (!DRY_RUN && !(await accountMayComment(fbEmail))) break;
+                    if (!DRY_RUN && !(await claimLead(String(lead.post_id), fbEmail))) continue;
+
+                    const templateText = templateFor(fbEmail);
+                    
+                    if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
+                        console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
+                        continue;
+                    }
+                    
+                    if (DRY_RUN) {
+                        console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
+                        console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
+                        await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
+                        continue;
+                    }
+                    
+                    const isNumericId = /^\d+$/.test(String(lead.post_id));
+
+                    if (isNumericId) {
+                        // ── FAST PATH: navigate directly to the post permalink ──
+                        let postUrl = '';
+                        if (lead.group_url.includes('/share/g/')) {
+                            console.log(`📍 Resolving share URL to group URL first...`);
+                            await page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 });
+                            await new Promise(r => setTimeout(r, 1500));
+                            const resolvedUrl = new URL(page.url());
+                            postUrl = `${resolvedUrl.origin}${resolvedUrl.pathname.replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        } else {
+                            postUrl = `${lead.group_url.split('?')[0].replace(/\/$/, '')}/posts/${lead.post_id}`;
+                        }
+                        console.log(`📍 Direct post URL: ${postUrl.slice(0, 90)}`);
+                        await Promise.race([
+                            page.goto(postUrl, { waitUntil: 'commit', timeout: 30000 }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
+                        ]);
+                        const iv = (loc: any) => Promise.race([
+                            loc.isVisible(),
+                            new Promise<boolean>(r => setTimeout(() => r(false), 500))
+                        ]);
+                        await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
+                        await new Promise(r => setTimeout(r, 3000)); // let page render comment section
+
+                        // Diagnostics: confirm we landed on the right page
+                        const landedUrl = page.url();
+                        const pageTitle = await page.title().catch(() => 'unknown');
+                        console.log(`📍 Landed URL: ${landedUrl.slice(0, 90)}`);
+                        console.log(`📍 Page title: ${pageTitle.slice(0, 60)}`);
+
+                        // The stored text for this lead was a comment or page
+                        // chrome, so judge the post itself now that it is open.
+                        if ((lead as any).__needsLiveCheck) {
+                            const liveText = await page.evaluate(() => {
+                                const art = document.querySelector('[role="article"]') as HTMLElement | null;
+                                return (art?.innerText || document.body?.innerText || '').slice(0, 2000);
+                            }).catch(() => '');
+                            const liveVerdict = quickKeywordFilter(liveText || '');
+                            if (liveVerdict !== 'approve' || looksLikePageChrome(liveText || '')) {
+                                console.log(`🛑 Lead ${lead.post_id}: live post text does not qualify (${liveVerdict}) — skipping for good.`);
+                                await supabase.from('leads').insert({ post_id: lead.post_id, group_url: lead.group_url, post_text: (liveText || '').slice(0, 500), status: 'rejected' });
+                                continue;
+                            }
+                            console.log(`✅ Lead ${lead.post_id}: live post text qualifies — proceeding.`);
+                        }
+
+                        // Count contenteditable/textbox elements for debugging
+                        const ceCount = await page.locator('[contenteditable]').count().catch(() => 0);
+                        const tbCount = await page.locator('[role="textbox"]').count().catch(() => 0);
+                        console.log(`📍 contenteditable: ${ceCount}, textbox: ${tbCount}`);
+
+                        // Try clicking the comment placeholder to activate the editor
+                        // Facebook's real label is "Write a public comment…", which the old
+                        // "Write a comment" match never hit, so the composer was never clicked.
+                        const commentPlaceholder = page.locator(
+                            '[aria-label*="Write a public comment" i], ' +
+                            '[aria-label*="Write a comment" i], ' +
+                            '[aria-label*="Leave a comment" i], ' +
+                            '[aria-placeholder*="comment" i], ' +
+                            '[data-lexical-editor], ' +
+                            '[contenteditable]'
+                        ).first();
+
+                        // On direct post page the comment box is present in DOM
+                        const commentInput = page.locator(
+                            '[contenteditable="true"][aria-label*="comment" i], ' +
+                            '[role="textbox"][aria-label*="comment" i], ' +
+                            '[contenteditable="true"]'
+                        ).first();
+                        // The composer mounts late on a cold, proxied VPS and only after the
+                        // placeholder is clicked. The old single 10s wait gave up on real
+                        // leads, so poll and re-click for up to ~45s before conceding.
+                        let inputReady = false;
+                        for (let attempt = 1; attempt <= 9 && !inputReady; attempt++) {
+                            await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
+                            try { await commentInput.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
+                            inputReady = await iv(commentInput);
+                            if (!inputReady) {
+                                console.log(`📍 Comment composer not up yet (attempt ${attempt}/9)…`);
+                                await page.mouse.wheel(0, 400).catch(() => {});
+                                await new Promise(r => setTimeout(r, 1500));
+                            }
+                        }
+                        console.log(`📍 Comment input ready: ${inputReady}`);
+
+                        if (inputReady) {
+                            await commentInput.click({ timeout: 3000 }).catch(() => {});
+                            console.log(`📍 Typing reply...`);
+                            await typeComment(page, templateText);
+                            console.log(`📍 Pressing Enter...`);
+                            await page.keyboard.press('Enter');
+
+                            const proof = await captureCommentPermalink(page, postUrl);
+                            if (!proof.verified) {
+                                // The comment never appeared. Record it honestly and do not
+                                // fire the booster reply on a post we did not comment on.
+                                console.warn(`⚠️ Comment NOT confirmed for lead ${lead.post_id} — logged unverified.`);
+                                await supabase.from('replies_log').insert({
+                                    post_id: lead.post_id,
+                                    group_url: lead.group_url,
+                                    comment_id: `unverified_${Date.now()}`,
+                                    user_profile_id: fbEmail,
+                                    replied_at: new Date()
+                                });
+                                await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
+                                await coolDown('next lead');
+                                continue;
+                            }
+                            const { error: replyErr } = await supabase.from('replies_log').insert({
+                                post_id: lead.post_id,
+                                group_url: lead.group_url,
+                                // The real permalink lives here (replies_log has no
+                                // comment_url column and the anon key cannot add one).
+                                // The dashboard renders any http value as a clickable link.
+                                comment_id: proof.url,
+                                user_profile_id: fbEmail,
+                                replied_at: new Date()
+                            });
+                            const { data: updatedLeads, error: leadErr } = await supabase
+                                .from('leads')
+                                .update({ status: 'posted' })
+                                .eq('post_id', lead.post_id)
+                                .select();
+                            console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
+
+                            await coolDown('Account 3 booster comment');
+                            await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                            await coolDown('next lead');
+                        } else {
+                            console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}. Marking status to prevent infinite loop.`);
+                            await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
+                        }
+                    } else {
+                        // ── SCROLL PATH: hash-based leads — navigate to group and scroll ──
+                        console.log(`📍 Group page: ${lead.group_url?.slice(0, 80)}`);
+                        await Promise.race([
+                            page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
+                        ]);
+                        console.log(`📍 Page committed. Waiting for feed...`);
+                        await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 8000 }).catch(() => {});
+                        console.log(`📍 Feed ready. Starting scroll search...`);
+
+                        for (let scroll = 0; scroll < 5; scroll++) {
+                            console.log(`📍 Scroll ${scroll + 1}/5...`);
+                            await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
+                            await new Promise(r => setTimeout(r, 500));
+                            const posts = page.locator('[data-ad-preview="message"], [role="article"]');
+                            let count = await posts.count();
+                            if (count === 0) count = await page.locator('div[role="feed"] > div').count();
+                            let found = false;
+
+                            for (let i = 0; i < count; i++) {
+                                const postText = (await posts.nth(i).innerText({ timeout: 2000 }).catch(() => '')).trim();
+                                const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
+                                const targetSnippet = norm(lead.post_text).slice(0, 35);
+                                if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
+                                    console.log(`🎯 Found post! Commenting via scroll path...`);
+                                    await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
+
+                                    const iv = (loc: any) => Promise.race([
+                                        loc.isVisible(),
+                                        new Promise<boolean>(r => setTimeout(() => r(false), 500))
+                                    ]);
+                                    await posts.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+                                    await new Promise(r => setTimeout(r, 300));
+
+                                    const commentBox = posts.nth(i).locator('[role="textbox"], [contenteditable="true"], [aria-label*="Write" i]').first();
+                                    if (!(await iv(commentBox))) {
+                                        const clicked = await Promise.race([
+                                            posts.nth(i).evaluate((el: Element) => {
+                                                const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i]') as HTMLElement | null;
+                                                if (btn) { btn.click(); return true; }
+                                                return false;
+                                            }).catch(() => false),
+                                            new Promise<boolean>(r => setTimeout(() => r(false), 2000))
+                                        ]);
+                                        console.log(`📍 JS comment btn click: ${clicked}`);
+                                        await new Promise(r => setTimeout(r, 2000));
+                                    }
+
+                                    const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
+                                    try { await activeBox.waitFor({ state: 'visible', timeout: 10000 }); } catch(e) {}
+                                    const boxReady = await iv(activeBox);
+                                    console.log(`📍 activeBox ready: ${boxReady}`);
+
+                                    if (boxReady) {
+                                        // ── FINAL DOM DEDUPLICATION CHECK ──
+                                        const pageText = await page.innerText('body').catch(() => '');
+                                        if (pageText.includes('Fiesta Fresh Cleaning') || pageText.includes('200% Happiness Guarantee')) {
+                                            console.log(`⚠️ DETECTED OWN COMMENT ON PAGE! Aborting duplicate.`);
+                                            found = true; break;
+                                        }
+
+                                        await activeBox.click({ timeout: 3000 }).catch(() => {});
+                                        await typeComment(page, templateText);
+                                        await page.keyboard.press('Enter');
+
+                                        const proof = await captureCommentPermalink(page, buildPostUrl(lead.group_url, lead.post_id));
+                                        const { error: replyErr } = await supabase.from('replies_log').insert({
+                                            post_id: lead.post_id,
+                                            group_url: lead.group_url,
+                                            comment_id: proof.url,
+                                            user_profile_id: fbEmail,
+                                            replied_at: new Date()
+                                        });
+                                        const { data: updatedLeads, error: leadErr } = await supabase
+                                            .from('leads')
+                                            .update({ status: 'posted' })
+                                            .eq('post_id', lead.post_id)
+                                            .select();
+                                        console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
+                                        found = true;
+
+                                        await coolDown('Account 3 booster comment');
+                                        await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
+                                        await coolDown('next lead');
+                                        break;
+                                    }
+                                }
+                            }
+                            if (found) break;
+                        }
+                    }
+                } catch (leadErr: any) {
+                    console.warn(`⚠️ Skipping lead ${lead.post_id} due to error: ${leadErr.message?.slice(0, 100)}`);
+                    continue;
+                }
+            }
+        }
 }
 
 async function runBot(account: FbAccount): Promise<boolean> {
@@ -2199,310 +2594,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
             console.warn(`⚠️ Could not refresh stored session: ${e.message}`);
         }
         
-        // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
-        const { data: rawLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
-        
-        // Fetch replies_log to filter out already executed leads (RLS update proof)
-        const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
-        const repliedPostIds = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
-
-        const approvedLeads = (rawLeads || []).filter(lead => {
-            const isAlreadyReplied = repliedPostIds.has(String(lead.post_id));
-            if (isAlreadyReplied) {
-                console.log(`⏭️ Lead ${lead.post_id} already has a logged reply in replies_log. Skipping execution.`);
-                return false;
-            }
-            // Re-validate against the CURRENT classifier before commenting. The
-            // anon key cannot UPDATE leads (RLS is insert/select only), so old
-            // rows keep whatever status they were given by an older, looser
-            // filter — including competitor ads and recruitment posts. Without
-            // this guard the bot would comment on all of them.
-            const leadText = lead.post_text || '';
-
-            // Guard 1: rows captured by the old whole-page scrape hold Facebook's
-            // own navigation blob, not a request. Never comment on those.
-            if (looksLikePageChrome(leadText)) {
-                console.log(`🛑 Lead ${lead.post_id} stored page chrome instead of post text — skipping.`);
-                return false;
-            }
-
-            // Guard 2: some rows captured a COMMENT on the post ("Name · 3h … Reply
-            // Share") rather than the post itself. Acting on those meant replying
-            // under a competitor's advertisement because a commenter said
-            // "I need cleaner". The post is not the lead, so skip it.
-            if (/\bReply\b[\s|]*\bShare\b\s*$/i.test(leadText.trim())) {
-                console.log(`🛑 Lead ${lead.post_id} captured a comment, not the post — skipping.`);
-                return false;
-            }
-
-            // Guard 3: age. A request from days ago is already served, and the
-            // queue still holds rows from before the scraper was fixed.
-            const createdAt = lead.created_at ? new Date(lead.created_at).getTime() : 0;
-            if (createdAt && Date.now() - createdAt > STALE_LEAD_MS) {
-                // These rows can never be cleared: the anon key has no UPDATE on
-                // `leads`, so they come back every cycle. Log each one once and
-                // then stay quiet instead of reprinting the same wall of text.
-                if (!loggedStaleLeads.has(String(lead.post_id))) {
-                    loggedStaleLeads.add(String(lead.post_id));
-                    const hrs = ((Date.now() - createdAt) / 3600000).toFixed(0);
-                    console.log(`🛑 Lead ${lead.post_id} is ${hrs}h old (limit ${STALE_LEAD_MS / 3600000}h) — skipping stale lead.`);
-                }
-                return false;
-            }
-
-            const verdict = quickKeywordFilter(leadText);
-            if (verdict !== 'approve') {
-                console.log(`🛑 Lead ${lead.post_id} no longer passes the filter (${verdict}) — skipping stale approval.`);
-                return false;
-            }
-            return true;
-        });
-
-        // Reply text now comes from accounts.config.json via templateFor(email)
-        // so each account posts its own wording (see PER-ACCOUNT TEMPLATES above).
-
-        if (approvedLeads && approvedLeads.length > 0) {
-            console.log(`✅ Found ${approvedLeads.length} approved leads to execute.`);
-            for (const lead of approvedLeads) {
-                try {
-                    console.log(`\n🚀 Executing approved lead: ${lead.post_id}`);
-
-                    // Per-account rules (accounts.config.json): daily cap and a
-                    // minimum gap between comments. Bursts are what gets these
-                    // accounts banned, so a blocked account simply waits.
-                    if (!DRY_RUN && !(await accountMayComment(fbEmail))) break;
-
-                    const templateText = templateFor(fbEmail);
-                    
-                    if (!lead.group_url || !lead.group_url.startsWith('http') || lead.group_url.includes('test')) {
-                        console.warn(`⚠️ Skipping invalid/test lead URL: ${lead.group_url}`);
-                        continue;
-                    }
-                    
-                    if (DRY_RUN) {
-                        console.log(`[DRY RUN] Would comment on: ${lead.group_url}`);
-                        console.log(`[DRY RUN] Comment: ${templateText.substring(0, 100)}...`);
-                        await supabase.from('leads').update({ status: 'posted' }).eq('id', lead.id);
-                        continue;
-                    }
-                    
-                    const isNumericId = /^\d+$/.test(String(lead.post_id));
-
-                    if (isNumericId) {
-                        // ── FAST PATH: navigate directly to the post permalink ──
-                        let postUrl = '';
-                        if (lead.group_url.includes('/share/g/')) {
-                            console.log(`📍 Resolving share URL to group URL first...`);
-                            await page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 });
-                            await new Promise(r => setTimeout(r, 1500));
-                            const resolvedUrl = new URL(page.url());
-                            postUrl = `${resolvedUrl.origin}${resolvedUrl.pathname.replace(/\/$/, '')}/posts/${lead.post_id}`;
-                        } else {
-                            postUrl = `${lead.group_url.split('?')[0].replace(/\/$/, '')}/posts/${lead.post_id}`;
-                        }
-                        console.log(`📍 Direct post URL: ${postUrl.slice(0, 90)}`);
-                        await Promise.race([
-                            page.goto(postUrl, { waitUntil: 'commit', timeout: 30000 }),
-                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
-                        ]);
-                        const iv = (loc: any) => Promise.race([
-                            loc.isVisible(),
-                            new Promise<boolean>(r => setTimeout(() => r(false), 500))
-                        ]);
-                        await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
-                        await new Promise(r => setTimeout(r, 3000)); // let page render comment section
-
-                        // Diagnostics: confirm we landed on the right page
-                        const landedUrl = page.url();
-                        const pageTitle = await page.title().catch(() => 'unknown');
-                        console.log(`📍 Landed URL: ${landedUrl.slice(0, 90)}`);
-                        console.log(`📍 Page title: ${pageTitle.slice(0, 60)}`);
-
-                        // Count contenteditable/textbox elements for debugging
-                        const ceCount = await page.locator('[contenteditable]').count().catch(() => 0);
-                        const tbCount = await page.locator('[role="textbox"]').count().catch(() => 0);
-                        console.log(`📍 contenteditable: ${ceCount}, textbox: ${tbCount}`);
-
-                        // Try clicking the comment placeholder to activate the editor
-                        // Facebook's real label is "Write a public comment…", which the old
-                        // "Write a comment" match never hit, so the composer was never clicked.
-                        const commentPlaceholder = page.locator(
-                            '[aria-label*="Write a public comment" i], ' +
-                            '[aria-label*="Write a comment" i], ' +
-                            '[aria-label*="Leave a comment" i], ' +
-                            '[aria-placeholder*="comment" i], ' +
-                            '[data-lexical-editor], ' +
-                            '[contenteditable]'
-                        ).first();
-
-                        // On direct post page the comment box is present in DOM
-                        const commentInput = page.locator(
-                            '[contenteditable="true"][aria-label*="comment" i], ' +
-                            '[role="textbox"][aria-label*="comment" i], ' +
-                            '[contenteditable="true"]'
-                        ).first();
-                        // The composer mounts late on a cold, proxied VPS and only after the
-                        // placeholder is clicked. The old single 10s wait gave up on real
-                        // leads, so poll and re-click for up to ~45s before conceding.
-                        let inputReady = false;
-                        for (let attempt = 1; attempt <= 9 && !inputReady; attempt++) {
-                            await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
-                            try { await commentInput.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
-                            inputReady = await iv(commentInput);
-                            if (!inputReady) {
-                                console.log(`📍 Comment composer not up yet (attempt ${attempt}/9)…`);
-                                await page.mouse.wheel(0, 400).catch(() => {});
-                                await new Promise(r => setTimeout(r, 1500));
-                            }
-                        }
-                        console.log(`📍 Comment input ready: ${inputReady}`);
-
-                        if (inputReady) {
-                            await commentInput.click({ timeout: 3000 }).catch(() => {});
-                            console.log(`📍 Typing reply...`);
-                            await typeComment(page, templateText);
-                            console.log(`📍 Pressing Enter...`);
-                            await page.keyboard.press('Enter');
-
-                            const proof = await captureCommentPermalink(page, postUrl);
-                            if (!proof.verified) {
-                                // The comment never appeared. Record it honestly and do not
-                                // fire the booster reply on a post we did not comment on.
-                                console.warn(`⚠️ Comment NOT confirmed for lead ${lead.post_id} — logged unverified.`);
-                                await supabase.from('replies_log').insert({
-                                    post_id: lead.post_id,
-                                    group_url: lead.group_url,
-                                    comment_id: `unverified_${Date.now()}`,
-                                    user_profile_id: fbEmail,
-                                    replied_at: new Date()
-                                });
-                                await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
-                                await coolDown('next lead');
-                                continue;
-                            }
-                            const { error: replyErr } = await supabase.from('replies_log').insert({
-                                post_id: lead.post_id,
-                                group_url: lead.group_url,
-                                // The real permalink lives here (replies_log has no
-                                // comment_url column and the anon key cannot add one).
-                                // The dashboard renders any http value as a clickable link.
-                                comment_id: proof.url,
-                                user_profile_id: fbEmail,
-                                replied_at: new Date()
-                            });
-                            const { data: updatedLeads, error: leadErr } = await supabase
-                                .from('leads')
-                                .update({ status: 'posted' })
-                                .eq('post_id', lead.post_id)
-                                .select();
-                            console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
-
-                            await coolDown('Account 3 booster comment');
-                            await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
-                            await coolDown('next lead');
-                        } else {
-                            console.warn(`⚠️ Comment input not found on post page for lead ${lead.post_id}. Marking status to prevent infinite loop.`);
-                            await supabase.from('leads').update({ status: 'failed' }).eq('post_id', lead.post_id);
-                        }
-                    } else {
-                        // ── SCROLL PATH: hash-based leads — navigate to group and scroll ──
-                        console.log(`📍 Group page: ${lead.group_url?.slice(0, 80)}`);
-                        await Promise.race([
-                            page.goto(lead.group_url, { waitUntil: 'commit', timeout: 30000 }),
-                            new Promise((_, rej) => setTimeout(() => rej(new Error('goto timeout 30s')), 32000))
-                        ]);
-                        console.log(`📍 Page committed. Waiting for feed...`);
-                        await page.waitForSelector('[role="article"], div[role="feed"]', { timeout: 8000 }).catch(() => {});
-                        console.log(`📍 Feed ready. Starting scroll search...`);
-
-                        for (let scroll = 0; scroll < 5; scroll++) {
-                            console.log(`📍 Scroll ${scroll + 1}/5...`);
-                            await Promise.race([page.mouse.wheel(0, 1000), new Promise(r => setTimeout(r, 2000))]);
-                            await new Promise(r => setTimeout(r, 500));
-                            const posts = page.locator('[data-ad-preview="message"], [role="article"]');
-                            let count = await posts.count();
-                            if (count === 0) count = await page.locator('div[role="feed"] > div').count();
-                            let found = false;
-
-                            for (let i = 0; i < count; i++) {
-                                const postText = (await posts.nth(i).innerText({ timeout: 2000 }).catch(() => '')).trim();
-                                const norm = (s: string) => (s || '').toLowerCase().replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s]/g, '').trim();
-                                const targetSnippet = norm(lead.post_text).slice(0, 35);
-                                if (targetSnippet.length > 5 && norm(postText).includes(targetSnippet)) {
-                                    console.log(`🎯 Found post! Commenting via scroll path...`);
-                                    await Promise.race([closeOverlays(page), new Promise(r => setTimeout(r, 3000))]);
-
-                                    const iv = (loc: any) => Promise.race([
-                                        loc.isVisible(),
-                                        new Promise<boolean>(r => setTimeout(() => r(false), 500))
-                                    ]);
-                                    await posts.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-                                    await new Promise(r => setTimeout(r, 300));
-
-                                    const commentBox = posts.nth(i).locator('[role="textbox"], [contenteditable="true"], [aria-label*="Write" i]').first();
-                                    if (!(await iv(commentBox))) {
-                                        const clicked = await Promise.race([
-                                            posts.nth(i).evaluate((el: Element) => {
-                                                const btn = el.querySelector('[aria-label*="Comment" i], span[class*="comment" i]') as HTMLElement | null;
-                                                if (btn) { btn.click(); return true; }
-                                                return false;
-                                            }).catch(() => false),
-                                            new Promise<boolean>(r => setTimeout(() => r(false), 2000))
-                                        ]);
-                                        console.log(`📍 JS comment btn click: ${clicked}`);
-                                        await new Promise(r => setTimeout(r, 2000));
-                                    }
-
-                                    const activeBox = page.locator('[role="textbox"], [contenteditable="true"][aria-label*="comment" i], [data-lexical-editor]').first();
-                                    try { await activeBox.waitFor({ state: 'visible', timeout: 10000 }); } catch(e) {}
-                                    const boxReady = await iv(activeBox);
-                                    console.log(`📍 activeBox ready: ${boxReady}`);
-
-                                    if (boxReady) {
-                                        // ── FINAL DOM DEDUPLICATION CHECK ──
-                                        const pageText = await page.innerText('body').catch(() => '');
-                                        if (pageText.includes('Fiesta Fresh Cleaning') || pageText.includes('200% Happiness Guarantee')) {
-                                            console.log(`⚠️ DETECTED OWN COMMENT ON PAGE! Aborting duplicate.`);
-                                            found = true; break;
-                                        }
-
-                                        await activeBox.click({ timeout: 3000 }).catch(() => {});
-                                        await typeComment(page, templateText);
-                                        await page.keyboard.press('Enter');
-
-                                        const proof = await captureCommentPermalink(page, buildPostUrl(lead.group_url, lead.post_id));
-                                        const { error: replyErr } = await supabase.from('replies_log').insert({
-                                            post_id: lead.post_id,
-                                            group_url: lead.group_url,
-                                            comment_id: proof.url,
-                                            user_profile_id: fbEmail,
-                                            replied_at: new Date()
-                                        });
-                                        const { data: updatedLeads, error: leadErr } = await supabase
-                                            .from('leads')
-                                            .update({ status: 'posted' })
-                                            .eq('post_id', lead.post_id)
-                                            .select();
-                                        console.log(`✅ Comment posted! rows: ${updatedLeads?.length ?? 0}, replyErr: ${replyErr?.message || 'none'}, leadErr: ${leadErr?.message || 'none'}`);
-                                        found = true;
-
-                                        await coolDown('Account 3 booster comment');
-                                        await postWebsiteUrlBoosterReply(lead.group_url, lead.post_id);
-                                        await coolDown('next lead');
-                                        break;
-                                    }
-                                }
-                            }
-                            if (found) break;
-                        }
-                    }
-                } catch (leadErr: any) {
-                    console.warn(`⚠️ Skipping lead ${lead.post_id} due to error: ${leadErr.message?.slice(0, 100)}`);
-                    continue;
-                }
-            }
-        }
-
+        if (BOT_ROLE !== 'scout') await executeApprovedLeads(page, fbEmail);
         // PHASE 1.5: Scan Facebook Notifications for instant alerts
         console.log("🔍 PHASE 1.5: Checking Facebook Notifications...");
         const notificationUrls = await scanFacebookNotifications(page);
@@ -2630,9 +2722,25 @@ async function runBot(account: FbAccount): Promise<boolean> {
             }
         }
 
-        // PHASE 2: Patrol the configured target groups directly
-        await patrolGroups(page);
-        await searchGroupsForLeads(page);
+        // PHASE 2: Patrol the configured target groups directly.
+        // A commenter never sweeps — it holds its browser open and drains the
+        // queue, so a lead found by the scout is answered in seconds.
+        if (BOT_ROLE === 'commenter') {
+            const pollMs = parseInt(process.env.COMMENTER_POLL_SECONDS || '20') * 1000;
+            const untilMs = Date.now() + parseInt(process.env.COMMENTER_SESSION_MINUTES || '55') * 60 * 1000;
+            console.log(`👂 Commenter mode (${fbEmail}) — polling the lead queue every ${pollMs / 1000}s.`);
+            while (Date.now() < untilMs) {
+                await new Promise(r => setTimeout(r, pollMs));
+                try {
+                    await executeApprovedLeads(page, fbEmail);
+                } catch (e: any) {
+                    console.error(`⚠️ Commenter pass failed: ${e.message?.slice(0, 120)}`);
+                }
+            }
+        } else {
+            await patrolGroups(page, fbEmail);
+            await searchGroupsForLeads(page);
+        }
 
     } catch (e) {
         console.error("💥 Error:", e);
@@ -2653,6 +2761,7 @@ let isRunning = false;
 async function main() {
     console.log("🚀 Fiesta Fresh Bot v2.0 Starting...");
     console.log(`Supabase: ${supabaseUrl}`);
+    console.log(`Role: ${BOT_ROLE}${BOT_ACCOUNT ? ` (pinned to ${BOT_ACCOUNT})` : ''} | accounts in rotation: ${ACCOUNTS.map(a => a.email).join(', ') || 'none'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
     {
         const m = process.memoryUsage();
