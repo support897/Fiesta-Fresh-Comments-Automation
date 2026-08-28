@@ -344,7 +344,7 @@ async function completeTwoFactor(page: any, secret: string | undefined, email: s
  * again for PASSWORD_RETRY_HOURS; the stored cookies are still retried every
  * cycle, so a session that comes back on its own is picked up immediately.
  */
-const PASSWORD_RETRY_HOURS = parseInt(process.env.PASSWORD_RETRY_HOURS || '6');
+const PASSWORD_RETRY_HOURS = parseInt(process.env.PASSWORD_RETRY_HOURS || '2');
 function pwAttemptFile(email: string): string {
     return path.join(__dirname, `.pwattempt_${email.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`);
 }
@@ -450,6 +450,7 @@ function loadAccounts(): FbAccount[] {
 
 const ACCOUNTS = loadAccounts();
 let currentAccountIndex = 0;
+let consecutiveAuthFailures = 0;
 let sessionAlertSent = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1004,6 +1005,35 @@ async function coolDown(label: string) {
 /**
  * Super fast typing - instantly inserts text
  */
+
+/**
+ * Navigate with retry. The VPS reaches Facebook through a SOCKS proxy
+ * (tailscaled -> home exit node). That link drops intermittently and every drop
+ * used to cost a whole group (or the whole cycle) because a single failed
+ * page.goto was fatal. Retry with backoff instead of losing the work.
+ */
+async function gotoWithRetry(page: any, url: string, label: string, tries: number = 3): Promise<boolean> {
+    for (let attempt = 1; attempt <= tries; attempt++) {
+        try {
+            await page.goto(url, { waitUntil: 'commit', timeout: 45000 });
+            if (attempt > 1) console.log(`   \u2705 ${label} loaded on attempt ${attempt}.`);
+            return true;
+        } catch (e: any) {
+            const msg = String(e?.message || e).slice(0, 120);
+            const transient = /SOCKS|ERR_PROXY|ERR_TUNNEL|ERR_TIMED_OUT|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|Timeout/i.test(msg);
+            if (attempt === tries || !transient) {
+                console.error(`   \u26a0\ufe0f ${label} navigation failed after ${attempt} attempt(s): ${msg}`);
+                if (!transient) throw e;
+                return false;
+            }
+            const backoff = 5000 * attempt * attempt; // 5s, 20s
+            console.warn(`   \u21bb ${label} navigation hiccup (${msg}) — retry ${attempt + 1}/${tries} in ${backoff / 1000}s`);
+            await new Promise(r => setTimeout(r, backoff));
+        }
+    }
+    return false;
+}
+
 async function humanType(page: any, selector: string, text: string) {
     await page.click(selector, { force: true }).catch(() => {});
     // Per-character typing with jitter — instant insertText is a strong bot tell.
@@ -1502,6 +1532,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
  * A cleaning request from days ago has already been served, and the queue still
  * contains rows captured before the scraper was fixed.
  */
+const loggedStaleLeads = new Set<string>();
 const STALE_LEAD_MS = Number(process.env.STALE_LEAD_HOURS || 24) * 3600 * 1000;
 
 const HEARTBEAT_KEY = '__heartbeat__';
@@ -1553,6 +1584,13 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
  * a rotating slice of active groups each cycle, classifies posts, and queues
  * matches as approved leads for the next execute phase.
  */
+/**
+ * Leads discovered during the current cycle. When a sweep turns something up we
+ * do NOT want to sit out the full rest hour before commenting on it — a
+ * cleaning request goes cold fast. The scheduler shortens the rest to a couple
+ * of minutes so the next cycle's PHASE 1 actions the fresh leads immediately.
+ */
+let newLeadsThisCycle = 0;
 let groupCursor = 0;
 const groupCursorFile = path.join(__dirname, 'group_cursor.txt');
 try {
@@ -1560,7 +1598,7 @@ try {
 } catch { /* ignore */ }
 
 async function patrolGroups(page: any) {
-    const perCycle = parseInt(process.env.GROUPS_PER_CYCLE || '10');
+    const perCycle = parseInt(process.env.GROUPS_PER_CYCLE || '999');
     if (perCycle <= 0) { console.log("\u23ed\ufe0f Group patrol disabled (GROUPS_PER_CYCLE=0)."); return; }
 
     let groups: string[] = [];
@@ -1594,7 +1632,8 @@ async function patrolGroups(page: any) {
     for (const groupUrl of slice) {
         try {
             console.log(`\ud83c\udfe1 Group: ${groupUrl.slice(0, 80)}`);
-            await page.goto(groupUrl, { waitUntil: 'commit', timeout: 45000 });
+            const groupOk = await gotoWithRetry(page, groupUrl, 'group', 3);
+            if (!groupOk) { console.warn(`   \u23ed\ufe0f Skipping ${groupUrl.slice(0, 60)} — proxy would not carry it.`); continue; }
             await randomDelay(2500, 5000);
             await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
 
@@ -1626,6 +1665,7 @@ async function patrolGroups(page: any) {
                         status: 'approved',
                     });
                     if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
+                    else newLeadsThisCycle++;
                 }
                 await page.mouse.wheel(0, 1400).catch(() => {});
                 await randomDelay(1800, 4000);
@@ -1804,6 +1844,7 @@ async function searchGroupsForLeads(page: any) {
                         status: 'approved',
                     });
                     if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
+                    else newLeadsThisCycle++;
                 }
             } catch (e: any) {
                 console.error(`\u26a0\ufe0f Search error (${term}): ${e.message?.slice(0, 90)}`);
@@ -1945,11 +1986,13 @@ async function runBot(account: FbAccount): Promise<boolean> {
 
     try {
         console.log("➡️ Navigating to Facebook...");
-        await page.goto('https://www.facebook.com', { waitUntil: 'commit', timeout: 45000 }).catch(async () => {
-            console.log("⚠️ Home goto slow — retrying once...");
-            await randomDelay(3000, 5000);
-            await page.goto('https://www.facebook.com', { waitUntil: 'commit', timeout: 45000 });
-        });
+        const homeOk = await gotoWithRetry(page, 'https://www.facebook.com', 'facebook.com', 4);
+        if (!homeOk) {
+            console.error("❌ Could not reach Facebook through the proxy after 4 attempts — ending this cycle early.");
+            recordLoginResult(fbEmail, false, 'proxy unreachable');
+            await context.close().catch(() => {});
+            return false;
+        }
         await randomDelay(3000, 5000);
 
         // Close overlays
@@ -2014,7 +2057,15 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 const emailField = page.locator('input[name="email"], #email, input[type="text"]').first();
                 const passField = page.locator('input[name="pass"], #pass, input[type="password"]').first();
 
-                if (await emailField.isVisible() && await passField.isVisible()) {
+                const emailVisible = await emailField.isVisible().catch(() => false);
+                const passVisible = await passField.isVisible().catch(() => false);
+                if (!emailVisible || !passVisible) {
+                    // Without this the bot silently fell through to "Login
+                    // verification failed" and nobody could tell whether the
+                    // password was wrong or the form never rendered.
+                    console.error(`\u26a0\ufe0f Login form did not render for ${fbEmail} (email field: ${emailVisible}, password field: ${passVisible}) at ${page.url().slice(0, 80)} — title "${await page.title().catch(() => '?')}"`);
+                }
+                if (emailVisible && passVisible) {
                     console.log(`👤 Entering credentials for ${fbEmail}...`);
                     await emailField.fill(fbEmail);
                     await randomDelay(500, 1000);
@@ -2181,8 +2232,14 @@ async function runBot(account: FbAccount): Promise<boolean> {
             // queue still holds rows from before the scraper was fixed.
             const createdAt = lead.created_at ? new Date(lead.created_at).getTime() : 0;
             if (createdAt && Date.now() - createdAt > STALE_LEAD_MS) {
-                const hrs = ((Date.now() - createdAt) / 3600000).toFixed(0);
-                console.log(`🛑 Lead ${lead.post_id} is ${hrs}h old (limit ${STALE_LEAD_MS / 3600000}h) — skipping stale lead.`);
+                // These rows can never be cleared: the anon key has no UPDATE on
+                // `leads`, so they come back every cycle. Log each one once and
+                // then stay quiet instead of reprinting the same wall of text.
+                if (!loggedStaleLeads.has(String(lead.post_id))) {
+                    loggedStaleLeads.add(String(lead.post_id));
+                    const hrs = ((Date.now() - createdAt) / 3600000).toFixed(0);
+                    console.log(`🛑 Lead ${lead.post_id} is ${hrs}h old (limit ${STALE_LEAD_MS / 3600000}h) — skipping stale lead.`);
+                }
                 return false;
             }
 
@@ -2625,7 +2682,7 @@ async function main() {
     // Facebook", every subsequent tick skipped). Rather than leak a wedged
     // browser on a 1GB box, exit non-zero and let systemd's Restart=always
     // bring up a clean process.
-    const CYCLE_TIMEOUT_MS = parseInt(process.env.CYCLE_TIMEOUT_SECONDS || '1500') * 1000;
+    const CYCLE_TIMEOUT_MS = parseInt(process.env.CYCLE_TIMEOUT_SECONDS || '7200') * 1000;
     let cycleStartedAt: number | null = null;
 
     setInterval(() => {
@@ -2643,6 +2700,7 @@ async function main() {
         }
         isRunning = true;
         cycleStartedAt = Date.now();
+        newLeadsThisCycle = 0;
         try {
             if (ACCOUNTS.length === 0) {
                 console.error("❌ No Facebook accounts configured.");
@@ -2664,6 +2722,17 @@ async function main() {
             }
             if (!success) {
                 console.error("❌ All configured Facebook accounts failed to authenticate in this cycle.");
+                consecutiveAuthFailures++;
+                if (consecutiveAuthFailures === 3 || consecutiveAuthFailures % 24 === 0) {
+                    await sendAlertEmail(
+                        'Fiesta bot: all Facebook logins failing',
+                        `Every configured account failed to authenticate for ${consecutiveAuthFailures} cycles in a row.\n\n` +
+                        `Login state: ${JSON.stringify(loginState, null, 2)}\n\n` +
+                        `The sessions need re-priming (bot/prime_session_mac.py) before any comment can be posted.`
+                    );
+                }
+            } else {
+                consecutiveAuthFailures = 0;
             }
         } catch (err) {
             console.error("Bot cycle failed:", err);
@@ -2686,12 +2755,48 @@ async function main() {
     // It now runs on its own timer, independent of Facebook entirely.
     setInterval(() => { checkAndSendDailyReport().catch(() => {}); }, 5 * 60 * 1000);
 
-    // Run immediately, then on interval
-    await cycle();
-    setInterval(() => {
-        console.log("\n⏰ Starting new scan cycle...");
-        cycle();
-    }, SCAN_INTERVAL);
+    // ─────────────────────────────────────────────────────────────────────────
+    // SCHEDULER
+    //
+    // The old setInterval fired every 30 min regardless of whether the previous
+    // cycle had finished, so a long sweep just got its ticks dropped and the
+    // box ran a browser almost continuously — starving the cold-email
+    // supervisor that shares this 1 GB VPS.
+    //
+    // Now: sweep every group, then sleep for a fixed rest period, then repeat.
+    // Between 23:00 and 05:00 Brisbane the bot stays asleep entirely.
+    // ─────────────────────────────────────────────────────────────────────────
+    const REST_MS = parseInt(process.env.SLEEP_BETWEEN_CYCLES_SECONDS || '3600') * 1000;
+    const QUIET_START = parseInt(process.env.QUIET_HOURS_START || '23');
+    const QUIET_END = parseInt(process.env.QUIET_HOURS_END || '5');
+    const bneHour = () => parseInt(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
+    const inQuietHours = () => {
+        if (QUIET_START === QUIET_END) return false;
+        const h = bneHour();
+        return QUIET_START < QUIET_END ? (h >= QUIET_START && h < QUIET_END) : (h >= QUIET_START || h < QUIET_END);
+    };
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+    (async () => {
+        for (;;) {
+            if (inQuietHours()) {
+                console.log(`😴 Quiet hours (${QUIET_START}:00-${QUIET_END}:00 Brisbane) — bot resting. Next check in 15 min.`);
+                await sleep(15 * 60 * 1000);
+                continue;
+            }
+            console.log("\n⏰ Starting new scan cycle...");
+            await cycle();
+            if (inQuietHours()) continue;
+            if (newLeadsThisCycle > 0) {
+                const quick = parseInt(process.env.FRESH_LEAD_REST_SECONDS || '120') * 1000;
+                console.log(`⚡ ${newLeadsThisCycle} fresh lead(s) found — short rest of ${Math.round(quick / 1000)}s, then commenting on them.`);
+                await sleep(quick);
+                continue;
+            }
+            console.log(`🛌 Cycle done — resting ${Math.round(REST_MS / 60000)} min so cold-email gets the box.`);
+            await sleep(REST_MS);
+        }
+    })();
 
     // Memory diagnostics (critical: Render OOM-kills at 512Mi)
     setInterval(() => {
