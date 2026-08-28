@@ -2050,8 +2050,15 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 }
                 // Clear existing session context cookies to get a clean slate
                 await context.clearCookies();
-                await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 45000 });
-                await randomDelay(2000, 4000);
+                // waitUntil:'commit' returns the moment the first byte lands, so on
+                // a flaky proxy the login page was still an empty document when we
+                // looked for the fields — the re-login "failed" without ever seeing
+                // a form. Retry the navigation, then wait for the form itself.
+                await gotoWithRetry(page, 'https://www.facebook.com/login', 'login page', 3);
+                await page.locator('input[name="email"], #email').first()
+                    .waitFor({ state: 'visible', timeout: 25000 })
+                    .catch(() => { /* logged below with the real page state */ });
+                await randomDelay(1500, 3000);
                 await closeOverlays(page);
 
                 const emailField = page.locator('input[name="email"], #email, input[type="text"]').first();
