@@ -41,8 +41,8 @@
       "role": "url_drop",
       "enabled": true,
       "share": 100,
-      "maxCommentsPerDay": 20,
-      "minMinutesBetweenComments": 8,
+      "maxCommentsPerDay": 50,
+      "minMinutesBetweenComments": 0,
       "template": "https://www.fiestafreshcleaning.com/"
     }
   ]

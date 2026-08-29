@@ -1548,13 +1548,13 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         const boosterCommentText = urlDropTemplate();
 
         const commentPlaceholder = boosterPage.locator(
+            '[aria-label*="Write a public comment" i], ' +
             '[aria-label*="Write a comment" i], ' +
             '[aria-label*="Leave a comment" i], ' +
+            '[aria-placeholder*="comment" i], ' +
             '[data-lexical-editor], ' +
             '[contenteditable]'
         ).first();
-        await commentPlaceholder.click({ timeout: 3000 }).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
 
         const commentInput = boosterPage.locator(
             '[contenteditable="true"][aria-label*="comment" i], ' +
@@ -1562,7 +1562,18 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             '[contenteditable="true"]'
         ).first();
 
-        if (await commentInput.isVisible({ timeout: 5000 })) {
+        let inputReady = false;
+        for (let attempt = 1; attempt <= 9 && !inputReady; attempt++) {
+            await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
+            try { await commentInput.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
+            inputReady = await iv(commentInput);
+            if (!inputReady) {
+                await boosterPage.mouse.wheel(0, 400).catch(() => {});
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+
+        if (inputReady) {
             await commentInput.click({ force: true }).catch(() => {});
             await boosterPage.keyboard.insertText(boosterCommentText);
             await boosterPage.keyboard.press('Enter');
