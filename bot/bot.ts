@@ -1952,14 +1952,21 @@ async function patrolGroups(page: any, fbEmail?: string) {
 
 /** Search terms rotated through group search, grouped by service line. */
 const SEARCH_TERMS: string[] = [
+    'cleaner',
+    'cleaners',
     'bond clean',
+    'bond cleaner',
     'end of lease clean',
     'vacate clean',
     'carpet cleaning',
     'house cleaner',
+    'house cleaning',
     'cleaner recommendation',
-    'office cleaning',
     'looking for a cleaner',
+    'need a cleaner',
+    'cleaner needed',
+    'domestic cleaner',
+    'office cleaning',
 ];
 
 let searchCursor = 0;
@@ -2028,11 +2035,11 @@ async function sessionStillAlive(page: any): Promise<boolean> {
     return true;
 }
 
-async function searchGroupsForLeads(page: any) {
-    const groupsPerCycle = parseInt(process.env.SEARCH_GROUPS_PER_CYCLE || '5');
-    const termsPerCycle = parseInt(process.env.SEARCH_TERMS_PER_CYCLE || '3');
+async function searchGroupsForLeads(page: any, fbEmail?: string) {
+    const groupsPerCycle = parseInt(process.env.SEARCH_GROUPS_PER_CYCLE || '12');
+    const termsPerCycle = parseInt(process.env.SEARCH_TERMS_PER_CYCLE || '4');
     if (groupsPerCycle <= 0 || termsPerCycle <= 0) {
-        console.log("\u23ed\ufe0f Search patrol disabled.");
+        console.log("⏭️ Search patrol disabled.");
         return;
     }
 
@@ -2041,9 +2048,9 @@ async function searchGroupsForLeads(page: any) {
         const { data } = await supabase.from('groups').select('url, is_active');
         groups = (data || []).filter((g: any) => g.is_active !== false).map((g: any) => g.url).filter(Boolean);
     } catch (e: any) {
-        console.error("\u26a0\ufe0f Could not load groups for search:", e.message);
+        console.error("⚠️ Could not load groups for search:", e.message);
     }
-    if (groups.length === 0) { console.log("\u26a0\ufe0f No groups to search."); return; }
+    if (groups.length === 0) { console.log("⚠️ No groups to search."); return; }
 
     // Rotate through groups and terms so every combination is covered over time.
     const groupSlice: string[] = [];
@@ -2058,7 +2065,7 @@ async function searchGroupsForLeads(page: any) {
     searchCursor = (searchCursor + groupSlice.length) % (groups.length * SEARCH_TERMS.length || 1);
     try { fs.writeFileSync(searchCursorFile, String(searchCursor), 'utf8'); } catch { /* ignore */ }
 
-    console.log(`\ud83d\udd0e PHASE 3: Searching ${groupSlice.length} groups for [${termSlice.join(', ')}]...`);
+    console.log(`🔎 PHASE 3: Searching ${groupSlice.length} groups for [${termSlice.join(', ')}]...`);
 
     const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
     const seen = new Set(realReplies(postedReplies).map((r: any) => String(r.post_id)));
@@ -2080,7 +2087,7 @@ async function searchGroupsForLeads(page: any) {
                 const posts = page.locator('[role="article"]');
                 const total = await posts.count().catch(() => 0);
                 const count = Math.min(total, 15);
-                console.log(`   \u2022 "${term}" \u2192 ${total} result(s)`);
+                console.log(`   • "${term}" in ${base.slice(0, 45)} → ${total} result(s)`);
                 for (let i = 0; i < count; i++) {
                     const el = posts.nth(i);
                     const text = await extractMainPostBody(el);
@@ -2098,13 +2105,25 @@ async function searchGroupsForLeads(page: any) {
                     seen.add(String(postId));
 
                     found++;
-                    console.log(`\ud83c\udfaf SEARCH LEAD "${term}" \u2192 ${postId}`);
+                    console.log(`🎯 SEARCH LEAD "${term}" → ${postId}`);
                     const { error } = await supabase.from('leads').insert({
                         post_id: postId,
                         group_url: groupUrl,
                         post_text: text.slice(0, 4000),
                         status: 'approved',
                     });
+                    if (error) console.log(`   ⚠️ lead insert: ${error.message}`);
+                    else newLeadsThisCycle++;
+
+                    if (fbEmail && BOT_ROLE !== 'scout') {
+                        try {
+                            console.log(`⚡ Immediately commenting on search lead ${postId}...`);
+                            await executeApprovedLeads(page, fbEmail);
+                            await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
+                        } catch (e: any) {
+                            console.error(`⚠️ Search comment pass failed: ${e.message?.slice(0, 120)}`);
+                        }
+                    }
                     if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
                     else newLeadsThisCycle++;
                 }
@@ -2971,8 +2990,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 await searchGroupsForLeads(page);
             }
         } else {
+            console.log("🔍 PHASE 2A: Targeted group search for cleaning requests...");
+            await searchGroupsForLeads(page, fbEmail);
+            console.log("📰 PHASE 2B: Combined groups feed scan...");
+            await scanGroupsFeed(page, fbEmail);
+            console.log("🏡 PHASE 2C: Chronological group patrol...");
             await patrolGroups(page, fbEmail);
-            await searchGroupsForLeads(page);
         }
 
     } catch (e) {
