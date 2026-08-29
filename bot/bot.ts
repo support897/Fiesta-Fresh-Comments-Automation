@@ -1278,35 +1278,77 @@ function looksLikePageChrome(text: string): boolean {
 }
 
 /**
+ * Cleanly extracts ONLY the main post body from a Facebook post container,
+ * strictly excluding any comments, comment forms, toolbars, and nested articles.
+ */
+async function extractMainPostBody(postLocator: Locator | any): Promise<string> {
+    try {
+        // 1. Direct message selector check (Facebook's official post message attributes)
+        const msgLocator = postLocator.locator('[data-ad-preview="message"], [data-ad-comet-preview="message"]').first();
+        const count = await msgLocator.count().catch(() => 0);
+        if (count > 0) {
+            const msgText = (await msgLocator.innerText({ timeout: 2500 }).catch(() => '')).trim();
+            if (msgText && msgText.length >= 15 && !looksLikePageChrome(msgText)) {
+                return msgText;
+            }
+        }
+
+        // 2. Fallback DOM evaluation: clone the article node and remove all comment nodes, forms, toolbars
+        const pureText = await postLocator.evaluate((article: HTMLElement) => {
+            const msg = article.querySelector('[data-ad-preview="message"], [data-ad-comet-preview="message"]');
+            if (msg && (msg as HTMLElement).innerText.trim().length >= 15) {
+                return (msg as HTMLElement).innerText.trim();
+            }
+
+            const clone = article.cloneNode(true) as HTMLElement;
+            // Remove nested comments, comment inputs, toolbars, and interaction bars
+            const removeSelectors = [
+                '[role="article"]', // nested comments
+                'form', // comment inputs
+                'ul', // comment threads
+                '[role="toolbar"]', // like/comment/share action bar
+                '[aria-label*="Comment" i]',
+                '[aria-label*="Like" i]',
+                '[aria-label*="Share" i]',
+                'div[role="feed"]'
+            ];
+            removeSelectors.forEach(sel => {
+                clone.querySelectorAll(sel).forEach(n => n.remove());
+            });
+            return clone.innerText.trim();
+        }).catch(() => '');
+
+        if (pureText && pureText.length >= 15 && !looksLikePageChrome(pureText)) {
+            return pureText;
+        }
+
+        // 3. Fallback to basic text if nothing else worked
+        const fallback = (await postLocator.innerText({ timeout: 2000 }).catch(() => '')).trim();
+        return looksLikePageChrome(fallback) ? '' : fallback;
+    } catch {
+        return '';
+    }
+}
+
+/**
  * Read the text of the TARGET post only — never the surrounding page.
- *
- * Order: the post's own message block, then the first article container. Any
- * candidate that looks like page chrome or is implausibly long for a single
- * post is discarded, so the classifier can only ever judge the post we are
- * about to comment on. Returns '' when nothing trustworthy is found, which the
- * caller treats as "skip this post".
  */
 async function readTargetPostText(page: any): Promise<string> {
-    const MAX_POST_CHARS = 2000;
-    const candidates = [
-        page.locator('[role="article"]').first().locator('[data-ad-preview="message"]').first(),
-        page.locator('[data-ad-preview="message"]').first(),
-        page.locator('[role="article"]').first(),
-    ];
-
-    for (const loc of candidates) {
-        const raw = (await loc.innerText({ timeout: 4000 }).catch(() => '')).trim();
-        if (!raw || raw.length < 25) continue;
-        if (looksLikePageChrome(raw)) {
-            console.log(`   \u26a0\ufe0f Ignored page-chrome capture (${raw.length} chars) — not the post body.`);
-            continue;
+    const postLoc = page.locator('[role="article"]').first();
+    if (await postLoc.count().catch(() => 0) > 0) {
+        const text = await extractMainPostBody(postLoc);
+        if (text && text.length >= 15 && !looksLikePageChrome(text)) {
+            return text;
         }
-        if (raw.length > MAX_POST_CHARS) {
-            console.log(`   \u26a0\ufe0f Ignored oversized capture (${raw.length} chars) — likely multiple posts.`);
-            continue;
-        }
-        return raw;
     }
+    
+    // Direct message fallback
+    const msgLoc = page.locator('[data-ad-preview="message"], [data-ad-comet-preview="message"]').first();
+    if (await msgLoc.count().catch(() => 0) > 0) {
+        const msg = (await msgLoc.innerText({ timeout: 2000 }).catch(() => '')).trim();
+        if (msg && msg.length >= 15 && !looksLikePageChrome(msg)) return msg;
+    }
+
     return '';
 }
 
@@ -1731,7 +1773,7 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
         const count = Math.min(await posts.count().catch(() => 0), 30);
         for (let i = 0; i < count; i++) {
             const el = posts.nth(i);
-            const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+            const text = await extractMainPostBody(el);
             if (!text || text.length < 25) continue;
             scanned++;
 
@@ -1844,7 +1886,7 @@ async function patrolGroups(page: any, fbEmail?: string) {
                 const count = Math.min(await posts.count().catch(() => 0), 25);
                 for (let i = 0; i < count; i++) {
                     const el = posts.nth(i);
-                    const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+                    const text = await extractMainPostBody(el);
                     if (!text || text.length < 25) continue;
 
                     const decision = quickKeywordFilter(text);
@@ -2041,7 +2083,7 @@ async function searchGroupsForLeads(page: any) {
                 console.log(`   \u2022 "${term}" \u2192 ${total} result(s)`);
                 for (let i = 0; i < count; i++) {
                     const el = posts.nth(i);
-                    const text = (await el.innerText({ timeout: 2500 }).catch(() => '')).trim();
+                    const text = await extractMainPostBody(el);
                     if (!text || text.length < 25) continue;
                     if (looksTooOld(text)) continue;
 
