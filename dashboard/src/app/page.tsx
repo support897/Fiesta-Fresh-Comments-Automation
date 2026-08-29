@@ -115,9 +115,8 @@ function proofLink(commentId: string | null, groupUrl: string, postId: string): 
 }
 
 const PROFILES = [
-  { name: "Taylor Chorley",  key: "projects.reports.ilse@gmail.com",  initial: "T", sub: "Main reply",     color: "bg-slate-50 text-slate-700" },
-  { name: "Ilse Placencia",  key: "ilse2taylor@gmail.com",            initial: "I", sub: "Main reply",     color: "bg-slate-50 text-slate-700" },
-  { name: "Website Booster", key: "account3",                         initial: "W", sub: "100% URL drop",   color: "bg-blue-50 text-blue-600"   },
+  { name: "Taylor Chorley",  key: "ilse2taylor@gmail.com", initial: "T", sub: "100% Main reply", color: "bg-slate-50 text-slate-700" },
+  { name: "Website Booster", key: "account3",              initial: "W", sub: "100% URL drop",   color: "bg-blue-50 text-blue-600"   },
 ];
 
 function agoLabel(iso: string | null): string {

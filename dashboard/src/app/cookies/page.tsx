@@ -20,21 +20,12 @@ import {
 const ACCOUNTS = [
   {
     key: "ilse2taylor@gmail.com",
-    label: "Account 1 — Ilse",
-    description: "50% of main replies (Taylor account)",
+    label: "Account 1 — Taylor Chorley",
+    description: "100% of main replies (Primary account)",
     color: "blue",
     emoji: "👤",
     supabaseEmail: "ilse2taylor@gmail.com",
     vpsFile: "FiestaSession cookies (Account 1)",
-  },
-  {
-    key: "projects.reports.ilse@gmail.com",
-    label: "Account 2 — Taylor",
-    description: "50% of main replies (Ilse account)",
-    color: "indigo",
-    emoji: "👤",
-    supabaseEmail: "projects.reports.ilse@gmail.com",
-    vpsFile: "FiestaSession cookies (Account 2)",
   },
   {
     key: "account3",
@@ -43,7 +34,7 @@ const ACCOUNTS = [
     color: "emerald",
     emoji: "🌐",
     supabaseEmail: "account3",
-    vpsFile: "account3_cookies.json",
+    vpsFile: "account3_cookies.json (Account 3)",
   },
 ];
 
@@ -180,7 +171,6 @@ export default function CookiesPage() {
 
   const commandsMap: Record<string, string> = {
     "ilse2taylor@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
-    "projects.reports.ilse@gmail.com": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
     "account3": "python3 /Users/ilse/Fiesta-Fresh-Comments-Automation-1/bot/prime_session_mac.py",
   };
 

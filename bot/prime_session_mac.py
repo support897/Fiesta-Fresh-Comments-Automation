@@ -10,7 +10,6 @@ ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI
 
 ACCOUNTS = [
     {"email": "ilse2taylor@gmail.com", "label": "Account 1 (ilse2taylor@gmail.com)"},
-    {"email": "projects.reports.ilse@gmail.com", "label": "Account 2 (projects.reports.ilse@gmail.com)"},
     {"email": "account3", "label": "Account 3 (Website URL Booster)"}
 ]
 
