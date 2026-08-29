@@ -20,7 +20,7 @@ import {
 const ACCOUNTS = [
   {
     key: "ilse2taylor@gmail.com",
-    label: "Account 1 — Taylor Chorley",
+    label: "Account 1 — Ilse Placencia",
     description: "100% of main replies (Primary account)",
     color: "blue",
     emoji: "👤",
