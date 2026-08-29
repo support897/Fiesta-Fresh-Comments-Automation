@@ -1654,7 +1654,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
  * contains rows captured before the scraper was fixed.
  */
 const loggedStaleLeads = new Set<string>();
-const STALE_LEAD_MS = Number(process.env.STALE_LEAD_HOURS || 24) * 3600 * 1000;
+const STALE_LEAD_MS = Number(process.env.STALE_LEAD_HOURS || 336) * 3600 * 1000; // 14 days (2 weeks)
 
 const HEARTBEAT_KEY = '__heartbeat__';
 
@@ -1975,9 +1975,9 @@ function looksTooOld(articleText: string): boolean {
     const head = articleText.slice(0, 220);
     if (/\b(\d+)\s*y\b/i.test(head)) return true;
     const weeks = head.match(/\b(\d+)\s*w\b/i);
-    if (weeks && parseInt(weeks[1] ?? '0') > 8) return true;
+    if (weeks && parseInt(weeks[1] ?? '0') > 2) return true; // max 2 weeks
     const months = head.match(/\b(\d+)\s*(mo|months?)\b/i);
-    if (months && parseInt(months[1] ?? '0') >= 3) return true;
+    if (months) return true;
     return false;
 }
 
