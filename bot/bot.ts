@@ -2536,7 +2536,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
         timezoneId: 'Australia/Brisbane',
     };
     if (headless) {
-        // Headless-shell (Render): strip GPU/images to survive 512Mi.
+        // Headless-shell: strip GPU/images for lightweight memory usage.
         contextOptions.args.push('--disable-gpu', '--blink-settings=imagesEnabled=false');
     }
     // Headed mode: no UA override, no image suppression — a normal Linux Chrome
@@ -2651,8 +2651,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
         }
 
         // Verify login — we cannot rely on the home-feed markers because the
-        // route-blocking (needed to survive Render's 512Mi limit) stops the home
-        // SPA from rendering them. Instead: logged-in == login form absent AND
+        // route-blocking stops the home SPA from rendering them. Instead: logged-in == login form absent AND
         // no checkpoint interstitial AND not on a login/captcha URL.
         const currentUrl = page.url();
         const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
@@ -3026,7 +3025,7 @@ async function main() {
         console.log(`📊 Boot RSS ${(m.rss / 1048576).toFixed(0)}MB | heap ${(m.heapUsed / 1048576).toFixed(0)}MB | heapTotal ${(m.heapTotal / 1048576).toFixed(0)}MB | external ${(m.external / 1048576).toFixed(0)}MB`);
     }
 
-    // Health check server (required for Render to keep the service alive)
+    // Local health check server on port 8080
     const PORT = parseInt(process.env.PORT || '8080');
     http.createServer(async (req, res) => {
         let cfg: any = null;
@@ -3187,7 +3186,7 @@ async function main() {
         }
     })();
 
-    // Memory diagnostics (critical: Render OOM-kills at 512Mi)
+    // Memory diagnostics
     setInterval(() => {
         const m = process.memoryUsage();
         console.log(`📊 RSS ${(m.rss / 1048576).toFixed(0)}MB | heap ${(m.heapUsed / 1048576).toFixed(0)}MB | heapTotal ${(m.heapTotal / 1048576).toFixed(0)}MB | external ${(m.external / 1048576).toFixed(0)}MB`);
