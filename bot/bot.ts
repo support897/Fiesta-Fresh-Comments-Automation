@@ -1734,7 +1734,7 @@ try {
  * anything Facebook's ranking hid from this feed.
  */
 async function scanGroupsFeed(page: any, fbEmail?: string) {
-    const scrolls = parseInt(process.env.FEED_SCROLLS || '6');
+    const scrolls = parseInt(process.env.FEED_SCROLLS || '15');
     console.log(`\ud83d\udcf0 FEED: polling the combined groups feed (${scrolls} scrolls)...`);
 
     const ok = await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 3);
@@ -2079,7 +2079,7 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
         for (const term of termSlice) {
             const searchUrl = `${base}/search/?q=${encodeURIComponent(term)}`;
             try {
-                await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
+                await page.goto(searchUrl, { waitUntil: 'commit', timeout: 30000 });
                 await randomDelay(3000, 6000);
                 if (!await sessionStillAlive(page)) return;
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
