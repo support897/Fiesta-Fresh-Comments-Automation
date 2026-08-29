@@ -16,3 +16,9 @@ bot/.env
 bot/FiestaSession/
 bot/last_report_date.txt
 bot/group_cursor.txt
+*.png
+*.key
+vps_details.txt
+bot/.pwattempt_*
+bot/.search_cursor
+bot/profiles/

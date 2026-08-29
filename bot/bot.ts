@@ -355,6 +355,13 @@ function clearPasswordAttempt(email: string): void {
     try { fs.rmSync(pwAttemptFile(email), { force: true }); } catch {}
 }
 function passwordAttemptAllowed(email: string): boolean {
+    // Hard kill-switch. Password logins from a datacenter IP are what trigger
+    // Facebook checkpoints in the first place; with PASSWORD_LOGIN=0 the bot is
+    // cookie-only and a dead session fails loudly instead of risking a lockout.
+    if (process.env.PASSWORD_LOGIN === "0") {
+        console.warn(`\u23f8\ufe0f Password login disabled (PASSWORD_LOGIN=0) for ${email} — cookies only.`);
+        return false;
+    }
     try {
         const raw = fs.readFileSync(pwAttemptFile(email), 'utf8').trim();
         const last = parseInt(raw);
@@ -983,7 +990,7 @@ const HARD_DISQUALIFIERS = [
     'looking for cleaners to join', 'looking for experienced cleaners',
     'wanting to join', 'work with us', 'employment opportunity',
     // ── support work / childcare / other care roles ──
-    'support worker', 'support workers', 'personal care', 'disability support',
+    'personal care', 'disability support',
     'carer', 'care worker', 'babysitting', 'baby sitting', 'babysitter',
     'nanny', 'au pair', 'tutor', 'dog walking', 'pet sitting', 'house sitting',
     // ── rentals & real estate ──
@@ -1007,9 +1014,8 @@ const HARD_DISQUALIFIERS = [
     'keeps your whole', 'admin', 'subscription', 'leads for your',
     'more clients', 'win more', 'scale your',
     // ── someone answering, not asking ──
-    'i highly recommend', 'can highly recommend', 'highly recommend',
     'i recommend', 'we recommend', 'shout out to', 'big thanks to',
-    'thanks to', 'thank you to', 'just used', 'just had', 'did a great job',
+    'thanks to', 'thank you to', 'just used', 'did a great job',
     'amazing job', 'so happy with',
 ];
 
@@ -1019,6 +1025,10 @@ const HARD_DISQUALIFIERS = [
  * does NOT also contain an unambiguous request for a cleaner.
  */
 const SOFT_DISQUALIFIERS = [
+    // Someone answering a request rather than making one -- but a genuine
+    // client post can also say it ("can anyone highly recommend a cleaner?"),
+    // so only reject when no explicit request phrase is present.
+    'i highly recommend', 'can highly recommend', 'highly recommend',
     'my team', 'our team', 'spots available', 'spaces available',
     'availability this week', 'availability next week', 'openings available', 'pm for a quote',
     'pm for quote', 'dm for a quote', 'dm for quote', 'pm me for',
@@ -1079,15 +1089,17 @@ async function coolDown(label: string) {
  * used to cost a whole group (or the whole cycle) because a single failed
  * page.goto was fatal. Retry with backoff instead of losing the work.
  */
+const NAV_TIMEOUT_MS = parseInt(process.env.NAV_TIMEOUT_MS || '90000');
+
 async function gotoWithRetry(page: any, url: string, label: string, tries: number = 3): Promise<boolean> {
     for (let attempt = 1; attempt <= tries; attempt++) {
         try {
-            await page.goto(url, { waitUntil: 'commit', timeout: 45000 });
+            await page.goto(url, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
             if (attempt > 1) console.log(`   \u2705 ${label} loaded on attempt ${attempt}.`);
             return true;
         } catch (e: any) {
             const msg = String(e?.message || e).slice(0, 120);
-            const transient = /SOCKS|ERR_PROXY|ERR_TUNNEL|ERR_TIMED_OUT|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|Timeout/i.test(msg);
+            const transient = /SOCKS|ERR_PROXY|ERR_TUNNEL|ERR_TIMED_OUT|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|Timeout|interrupted by another navigation|frame was detached/i.test(msg);
             if (attempt === tries || !transient) {
                 console.error(`   \u26a0\ufe0f ${label} navigation failed after ${attempt} attempt(s): ${msg}`);
                 if (!transient) throw e;
@@ -1496,7 +1508,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         }
 
         console.log(`🌐 Booster landing on URL: ${targetUrl.slice(0, 90)}`);
-        await boosterPage.goto(targetUrl, { waitUntil: 'commit', timeout: 45000 });
+        await boosterPage.goto(targetUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
         await new Promise(r => setTimeout(r, 500));
 
         const boosterCommentText = urlDropTemplate();
@@ -1549,7 +1561,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
     console.log("🔔 Scanning Facebook Notifications for new group posts...");
     const postUrls: string[] = [];
     try {
-        await page.goto("https://www.facebook.com/notifications", { waitUntil: 'commit', timeout: 45000 });
+        await page.goto("https://www.facebook.com/notifications", { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
         await new Promise(r => setTimeout(r, 4000));
         
         // Wait for notification list
@@ -1795,8 +1807,14 @@ async function patrolGroups(page: any, fbEmail?: string) {
     for (let i = 0; i < Math.min(perCycle, groups.length); i++) {
         slice.push(groups[(groupCursor + i) % groups.length]!);
     }
-    groupCursor = (groupCursor + slice.length) % groups.length;
-    try { fs.writeFileSync(groupCursorFile, String(groupCursor), 'utf8'); } catch { /* ignore */ }
+    // The cursor used to advance only once a full 104-group lap finished. The
+    // process never survived a whole lap, so it rewound to the same start
+    // point forever and only ever saw the first few groups. Save per group.
+    const startCursor = groupCursor;
+    const saveCursor = (v: number) => {
+        groupCursor = ((v % groups.length) + groups.length) % groups.length;
+        try { fs.writeFileSync(groupCursorFile, String(groupCursor), 'utf8'); } catch { /* ignore */ }
+    };
 
     console.log(`\ud83d\udd0d PHASE 2: Patrolling ${slice.length}/${groups.length} groups (cursor now ${groupCursor})...`);
 
@@ -1805,14 +1823,22 @@ async function patrolGroups(page: any, fbEmail?: string) {
     const { data: knownLeads } = await supabase.from('leads').select('post_id');
     for (const l of knownLeads || []) seen.add(String(l.post_id));
 
-    for (const groupUrl of slice) {
+    for (const [gi, groupUrl] of slice.entries()) {
         try {
-            console.log(`\ud83c\udfe1 Group: ${groupUrl.slice(0, 80)}`);
-            const groupOk = await gotoWithRetry(page, groupUrl, 'group', 3);
+            console.log(`\ud83c\udfe1 Group: ${gi + 1}/${slice.length} ${groupUrl.slice(0, 80)}`);
+            // Facebook's default group view is ranked, which buries exactly the
+            // plain-text "can anyone recommend a cleaner?" posts we want.
+            // CHRONOLOGICAL turns the ranker off and returns every post in order.
+            const bare = groupUrl.split('?')[0]!.replace(/\/$/, '');
+            const chronoUrl = /\/groups\/[^/]+$/.test(bare)
+                ? `${bare}?sorting_setting=CHRONOLOGICAL`
+                : groupUrl;
+            const groupOk = await gotoWithRetry(page, chronoUrl, 'group', 3);
             if (!groupOk) { console.warn(`   \u23ed\ufe0f Skipping ${groupUrl.slice(0, 60)} — proxy would not carry it.`); continue; }
             await randomDelay(2500, 5000);
             await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
 
+            let lastArticleCount = -1;
             for (let scroll = 0; scroll < 3; scroll++) {
                 const posts = page.locator('[role="article"]');
                 const count = Math.min(await posts.count().catch(() => 0), 25);
@@ -1843,6 +1869,10 @@ async function patrolGroups(page: any, fbEmail?: string) {
                     if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
                     else newLeadsThisCycle++;
                 }
+                // A scroll that reveals no new article means the end of the
+                // chronological page -- keep scrolling and we just burn time.
+                if (count === lastArticleCount) break;
+                lastArticleCount = count;
                 await page.mouse.wheel(0, 1400).catch(() => {});
                 await randomDelay(1800, 4000);
             }
@@ -1861,6 +1891,8 @@ async function patrolGroups(page: any, fbEmail?: string) {
             }
         } catch (e: any) {
             console.error(`\u26a0\ufe0f Patrol error on ${groupUrl.slice(0, 60)}: ${e.message?.slice(0, 100)}`);
+        } finally {
+            saveCursor(startCursor + gi + 1);
         }
     }
     console.log("\u2705 PHASE 2 patrol complete.");
@@ -1921,7 +1953,7 @@ async function resolveGroupUrl(page: any, url: string): Promise<string | null> {
 
     let resolved: string | null = null;
     try {
-        await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.goto(base, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
         // Share links bounce through a client-side redirect, so the URL right
         // after load is still /share/g/... — wait for the real one to appear.
         await page.waitForURL(/facebook\.com\/groups\//, { timeout: 20000 }).catch(() => {});
@@ -1998,7 +2030,7 @@ async function searchGroupsForLeads(page: any) {
         for (const term of termSlice) {
             const searchUrl = `${base}/search/?q=${encodeURIComponent(term)}`;
             try {
-                await page.goto(searchUrl, { waitUntil: 'commit', timeout: 45000 });
+                await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
                 await randomDelay(3000, 6000);
                 if (!await sessionStillAlive(page)) return;
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
@@ -2747,7 +2779,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
         for (const url of notificationUrls) {
             console.log(`\n🔔 Processing notification post: ${url}`);
             try {
-                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
                 await randomDelay(2000, 3000);
 
                 // Wait for the POST itself, never the page shell. The old code
