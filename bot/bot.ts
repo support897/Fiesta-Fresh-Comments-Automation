@@ -2193,9 +2193,8 @@ async function executeApprovedLeads(page: any, fbEmail: string) {
                 return false;
             }
 
-            if ((lead as any).__needsLiveCheck) return true; // stored text is junk; judged live instead
             const verdict = quickKeywordFilter(leadText);
-            if (verdict !== 'approve') {
+            if (verdict === 'reject') {
                 console.log(`🛑 Lead ${lead.post_id} no longer passes the filter (${verdict}) — skipping stale approval.`);
                 return false;
             }
@@ -2271,7 +2270,9 @@ async function executeApprovedLeads(page: any, fbEmail: string) {
                                 return (art?.innerText || document.body?.innerText || '').slice(0, 2000);
                             }).catch(() => '');
                             const liveVerdict = quickKeywordFilter(liveText || '');
-                            if (liveVerdict !== 'approve' || looksLikePageChrome(liveText || '')) {
+                            let liveIsLead = liveVerdict === 'approve';
+                            if (liveVerdict === 'unsure') liveIsLead = await evaluatePostWithAI(liveText || '');
+                            if (!liveIsLead || looksLikePageChrome(liveText || '')) {
                                 console.log(`🛑 Lead ${lead.post_id}: live post text does not qualify (${liveVerdict}) — skipping for good.`);
                                 rememberRejectedLead(String(lead.post_id));
                                 await supabase.from('leads').insert({ post_id: lead.post_id, group_url: lead.group_url, post_text: (liveText || '').slice(0, 500), status: 'rejected' });
