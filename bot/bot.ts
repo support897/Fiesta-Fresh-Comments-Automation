@@ -1216,17 +1216,7 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
         return 'approve';
     }
 
-    // 2b. Advertiser-ish signals only disqualify when there was no clear request
-    //     above — real clients do write "PM me" and "must have an ABN".
-    const soft = firstMatch(text, SOFT_DISQUALIFIERS);
-    if (soft) {
-        console.log(`❌ Rejected — advertiser signal: "${soft}"`);
-        return 'reject';
-    }
-
-    // 3. Service word + request signal = lead. This is what catches the long
-    //    tail: "any recommendations for carpet cleaning", "after an oven clean",
-    //    "how much for a bond clean", "ISO end of lease cleaning".
+    // 3. Service word + request signal = lead.
     const svc = detectServiceLine(text);
     const ask = firstMatch(text, REQUEST_SIGNALS);
     if (svc && ask) {
@@ -1234,14 +1224,16 @@ function quickKeywordFilter(postText: string): 'approve' | 'reject' | 'unsure' {
         return 'approve';
     }
 
-    // 4. Cleaning is mentioned but nobody is obviously asking — defer to the LLM
-    //    when a key is configured, otherwise stay silent rather than guess.
+    // 4. Any cleaning post not caught above — let Gemini AI evaluate with full intelligence
     if (svc) {
-        if (process.env.GEMINI_API_KEY) {
-            console.log(`🤔 Mentions ${svc.line} service "${svc.word}" with no clear request — sending to Gemini...`);
-            return 'unsure';
-        }
-        console.log(`➖ Mentions "${svc.word}" but no request signal and no GEMINI_API_KEY — skipping.`);
+        console.log(`🤔 Mentions ${svc.line} service "${svc.word}" — sending to Gemini AI...`);
+        return 'unsure';
+    }
+
+    // 5. Generic advertiser signals
+    const soft = firstMatch(text, SOFT_DISQUALIFIERS);
+    if (soft) {
+        console.log(`❌ Rejected — advertiser signal: "${soft}"`);
         return 'reject';
     }
 
