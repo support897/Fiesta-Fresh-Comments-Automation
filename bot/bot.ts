@@ -2982,15 +2982,16 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 }
             }
         } else {
+            // Run PHASE 3 keyword search FIRST so fresh "need a cleaner" posts
+            // are found and commented on in seconds, before the slow feed scan
+            // and 32-group chronological patrol. Search surfaces the plain-text
+            // posts that Facebook's ranked feed and a short patrol never show.
+            console.log("🔎 PHASE 3: Searching groups for cleaning-service keywords...");
+            await searchGroupsForLeads(page, fbEmail);
             console.log("📰 PHASE 2A: Scanning combined groups feed...");
             await scanGroupsFeed(page, fbEmail);
             console.log("🏡 PHASE 2B: Patrolling active Gold Coast groups chronologically...");
             await patrolGroups(page, fbEmail);
-            // PHASE 3 was defined but never called — the biggest source of
-            // missed posts. Search finds the plain-text "need a cleaner" posts
-            // that Facebook's ranked feed and the 3-scroll patrol never show.
-            console.log("🔎 PHASE 3: Searching groups for cleaning-service keywords...");
-            await searchGroupsForLeads(page, fbEmail);
         }
 
     } catch (e) {

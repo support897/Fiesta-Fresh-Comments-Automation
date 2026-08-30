@@ -30,7 +30,7 @@
       "email": "projects.reports.ilse@gmail.com",
       "label": "Projects Reports",
       "role": "main_reply",
-      "enabled": true,
+      "enabled": false,
       "share": 100,
       "maxCommentsPerDay": 24,
       "minMinutesBetweenComments": 15,
