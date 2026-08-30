@@ -954,7 +954,8 @@ const HARD_DISQUALIFIERS = [
     'seeking cleaning work', 'available for work', 'i am a cleaner',
     'im a cleaner', 'i am a professional cleaner', 'experienced cleaner available',
     'cleaner available', 'cleaners available', 'i clean houses',
-    'i do cleaning', 'we do cleaning', 'happy to clean',
+    'i do cleaning', 'we do cleaning', 'happy to clean', 'cleaning work',
+    'construction cleaning work', 'commercial cleaning work',
     'hiring cleaners', 'we are hiring', 'now hiring', 'join our team',
     'cleaner position', 'cleaning position', 'job opening', 'job vacancy',
     'position available', 'positions available', 'casual work',
@@ -1326,12 +1327,21 @@ async function extractMainPostBody(postLocator: Locator | any): Promise<string> 
 /**
  * Read the text of the TARGET post only — never the surrounding page.
  */
-async function readTargetPostText(page: any): Promise<string> {
-    const postLoc = page.locator('[role="article"]').first();
-    if (await postLoc.count().catch(() => 0) > 0) {
-        const text = await extractMainPostBody(postLoc);
-        if (text && text.length >= 15 && !looksLikePageChrome(text)) {
-            return text;
+async function readTargetPostText(page: any, targetPostId?: string): Promise<string> {
+    const articles = page.locator('[role="article"]');
+    const articleCount = await articles.count().catch(() => 0);
+    if (articleCount > 0) {
+        if (targetPostId) {
+            for (let i = 0; i < articleCount; i++) {
+                const article = articles.nth(i);
+                const articleId = await extractFacebookPostId(article);
+                if (articleId !== targetPostId) continue;
+                const text = await extractMainPostBody(article);
+                if (text && text.length >= 15 && !looksLikePageChrome(text)) return text;
+            }
+        } else {
+            const text = await extractMainPostBody(articles.first());
+            if (text && text.length >= 15 && !looksLikePageChrome(text)) return text;
         }
     }
     
@@ -1379,7 +1389,7 @@ async function evaluatePostWithAI(postText: string): Promise<boolean> {
         console.log("🧠 Evaluating post via Google Gemini AI...");
         if (!process.env.GEMINI_API_KEY) {
             console.warn("⚠️ GEMINI_API_KEY missing! Falling back to basic keyword check.");
-            return postText.toLowerCase().includes('clean');
+            return false;
         }
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -1416,7 +1426,7 @@ Post text to evaluate:
         return response.includes("YES");
     } catch (e) {
         console.error("❌ Gemini API failed:", e);
-        return postText.toLowerCase().includes('clean');
+        return false;
     }
 }
 
@@ -1656,7 +1666,16 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
                 const multiPermalinks = urlObj.searchParams.get('multi_permalinks');
                 urlObj.search = ''; // remove tracking params like notif_id
                 if (multiPermalinks) {
-                    urlObj.searchParams.set('multi_permalinks', multiPermalinks);
+                    // A notification can bundle several posts in one URL. Emit
+                    // one URL per ID so the caller reads/classifies every post,
+                    // rather than silently discarding all but the first.
+                    for (const postId of decodeURIComponent(multiPermalinks).split(',').map(id => id.trim()).filter(Boolean)) {
+                        const target = new URL(urlObj.toString());
+                        target.searchParams.set('multi_permalinks', postId);
+                        const targetUrl = target.toString();
+                        if (!postUrls.includes(targetUrl)) postUrls.push(targetUrl);
+                    }
+                    continue;
                 }
                 const finalUrl = urlObj.toString();
                 if (!postUrls.includes(finalUrl)) {
@@ -2871,6 +2890,18 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
                 await randomDelay(2000, 3000);
 
+                // Resolve the ID from the notification URL before reading text.
+                // Multi-permalink notifications can render several articles; the
+                // first article is not necessarily the requested post.
+                let postID: string | null = null;
+                const match = url.match(/(?:\/posts\/|\/permalink\/)(\d+)/);
+                if (match?.[1]) {
+                    postID = match[1];
+                } else {
+                    const multiMatch = url.match(/multi_permalinks=([^&]+)/);
+                    if (multiMatch?.[1]) postID = decodeURIComponent(multiMatch[1]).split(',')[0] || null;
+                }
+
                 // Wait for the POST itself, never the page shell. The old code
                 // fell back to [role="main"] — the whole main column — so the
                 // classifier judged the entire feed (sidebar ads, other posts,
@@ -2878,7 +2909,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 // words while commenting on a different one.
                 await page.waitForSelector('[data-ad-preview="message"], [role="article"]', { timeout: 15000 }).catch(() => {});
 
-                let postText = await readTargetPostText(page);
+                let postText = await readTargetPostText(page, postID || undefined);
                 if (!postText) {
                     console.log("   ⚠️ Could not read the post body itself. Skipping.");
                     continue;
@@ -2886,16 +2917,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 
                 const cleanText = postText.replace(/[\W_]+/g, '').toLowerCase(); 
                 const textHash = cleanText.substring(0, 40);
-                let postID = `hash_${textHash}`;
-                const match = url.match(/(?:\/posts\/|\/permalink\/)(\d+)/);
-                if (match && match[1]) {
-                    postID = match[1];
-                } else {
-                    const multiMatch = url.match(/multi_permalinks=([^&]+)/);
-                    if (multiMatch && multiMatch[1]) {
-                        postID = decodeURIComponent(multiMatch[1]).split(',')[0] ?? postID;
-                    }
-                }
+                postID = postID || `hash_${textHash}`;
 
                 const { data: alreadyReplied } = await supabase
                     .from('replies_log')
