@@ -1054,6 +1054,7 @@ const GEO_EXCLUDE = [
     'adelaide', 'melbourne', 'sydney', 'perth', 'hobart', 'darwin', 'canberra',
     'geelong', 'ballarat', 'bendigo', 'newcastle', 'wollongong', 'launceston',
     'townsville', 'cairns', 'mackay', 'rockhampton', 'toowoomba', 'bundaberg',
+    'brisbane', 'logan', 'ipswich', 'sunshine coast',
     'victoria', 'new south wales', 'nsw', 'south australia', 'western australia',
     'tasmania', 'northern territory', 'mambourin', 'new zealand', 'auckland',
 ];
@@ -1385,18 +1386,20 @@ async function evaluatePostWithAI(postText: string): Promise<boolean> {
         // Using gemini-3.6-flash for speed and low cost
         const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
-        const prompt = `You are a highly intelligent lead generation assistant for a residential cleaning company.
-Your job is to read Facebook posts and determine if the author is asking for a cleaner or cleaning services.
+        const prompt = `You are a highly intelligent lead generation assistant for a residential cleaning company serving ONLY the Gold Coast, Queensland area.
+Your job is to read Facebook posts and determine if the author is asking for a cleaner or cleaning services specifically in the Gold Coast region.
 
-Reply with EXACTLY ONE WORD: "YES" if they are asking for a cleaner/cleaning service, or "NO" if they are not.
+Reply with EXACTLY ONE WORD: "YES" if they are asking for a cleaner/cleaning service in the Gold Coast region, or "NO" if they are not (or if they are in another city like Brisbane, Sydney, Melbourne).
 
 Examples of YES:
-- "Can anyone recommend a good bond cleaner?"
-- "Need someone to clean my 4 bedroom house this weekend."
-- "Looking for a reliable cleaner in Southport."
-- "Anyone free to do an end of lease clean?"
+- "Can anyone recommend a good bond cleaner in Southport?"
+- "Need someone to clean my 4 bedroom house in Robina this weekend."
+- "Looking for a reliable cleaner in Surfers Paradise or Burleigh."
+- "Anyone free to do an end of lease clean in Coomera?"
 
-Examples of NO (False Positives):
+Examples of NO (False Positives or Wrong Location):
+- "Need a cleaner in Brisbane"
+- "Looking for a house cleaner in Sydney"
 - "Cleaning out my closet, selling clothes!"
 - "I run a cleaning business and have capacity."
 - "My dog is so clean after his bath!"
