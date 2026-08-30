@@ -1927,26 +1927,27 @@ async function patrolGroups(page: any, fbEmail?: string) {
             await randomDelay(2500, 5000);
             await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
 
-            let lastArticleCount = -1;
+            const observedPostIds = new Set<string>();
+            let stagnantScrolls = 0;
             for (let scroll = 0; scroll < 6; scroll++) {
                 const posts = page.locator('[role="article"]');
-                const count = Math.min(await posts.count().catch(() => 0), 25);
+                const count = await posts.count().catch(() => 0);
+                const before = observedPostIds.size;
                 for (let i = 0; i < count; i++) {
                     const el = posts.nth(i);
                     const text = await extractMainPostBody(el);
                     if (!text || text.length < 25) continue;
+
+                    let postId = await extractFacebookPostId(el);
+                    if (!postId) postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
+                    observedPostIds.add(String(postId));
 
                     const decision = quickKeywordFilter(text);
                     let isLead = decision === 'approve';
                     if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
                     if (!isLead) continue;
 
-                    let postId = await extractFacebookPostId(el);
-                    if (!postId) {
-                        postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
-                    }
                     if (seen.has(String(postId))) continue;
-                    seen.add(String(postId));
 
                     console.log(`\ud83c\udfaf PATROL LEAD ${postId} — queued as approved.`);
                     const { error } = await supabase.from('leads').insert({
@@ -1956,12 +1957,17 @@ async function patrolGroups(page: any, fbEmail?: string) {
                         status: 'approved',
                     });
                     if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
-                    else newLeadsThisCycle++;
+                    else {
+                        seen.add(String(postId));
+                        newLeadsThisCycle++;
+                    }
                 }
-                // A scroll that reveals no new article means the end of the
-                // chronological page -- keep scrolling and we just burn time.
-                if (count === lastArticleCount) break;
-                lastArticleCount = count;
+                if (observedPostIds.size === before) stagnantScrolls++;
+                else stagnantScrolls = 0;
+                // Stop only after two scrolls reveal no new post identity. The
+                // old count-based check stopped at 25 forever, even as Facebook
+                // appended more articles to the DOM.
+                if (stagnantScrolls >= 2) break;
                 await page.mouse.wheel(0, 1400).catch(() => {});
                 await randomDelay(1800, 4000);
             }
@@ -2131,48 +2137,59 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
                 if (!await sessionStillAlive(page)) return;
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
 
-                const posts = page.locator('[role="article"]');
-                const total = await posts.count().catch(() => 0);
-                const count = Math.min(total, 15);
-                console.log(`   • "${term}" in ${base.slice(0, 45)} → ${total} result(s)`);
-                for (let i = 0; i < count; i++) {
-                    const el = posts.nth(i);
-                    const text = await extractMainPostBody(el);
-                    if (!text || text.length < 25) continue;
-                    if (looksTooOld(text)) continue;
+                const searchSeen = new Set<string>();
+                let stagnantSearchScrolls = 0;
+                for (let searchScroll = 0; searchScroll < 6; searchScroll++) {
+                    const posts = page.locator('[role="article"]');
+                    const total = await posts.count().catch(() => 0);
+                    const before = searchSeen.size;
+                    console.log(`   • "${term}" in ${base.slice(0, 45)} → ${total} result(s), page ${searchScroll + 1}`);
+                    for (let i = 0; i < total; i++) {
+                        const el = posts.nth(i);
+                        const text = await extractMainPostBody(el);
+                        if (!text || text.length < 25) continue;
+                        if (looksTooOld(text)) continue;
 
-                    const decision = quickKeywordFilter(text);
-                    let isLead = decision === 'approve';
-                    if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
-                    if (!isLead) continue;
+                        let postId = await extractFacebookPostId(el);
+                        if (!postId) postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
+                        searchSeen.add(String(postId));
+                        if (seen.has(String(postId))) continue;
 
-                    let postId = await extractFacebookPostId(el);
-                    if (!postId) postId = `hash_${text.replace(/[\W_]+/g, '').toLowerCase().substring(0, 40)}`;
-                    if (seen.has(String(postId))) continue;
-                    seen.add(String(postId));
+                        const decision = quickKeywordFilter(text);
+                        let isLead = decision === 'approve';
+                        if (decision === 'unsure') isLead = await evaluatePostWithAI(text);
+                        if (!isLead) continue;
 
-                    found++;
-                    console.log(`🎯 SEARCH LEAD "${term}" → ${postId}`);
-                    const { error } = await supabase.from('leads').insert({
-                        post_id: postId,
-                        group_url: groupUrl,
-                        post_text: text.slice(0, 4000),
-                        status: 'approved',
-                    });
-                    if (error) console.log(`   ⚠️ lead insert: ${error.message}`);
-                    else newLeadsThisCycle++;
+                        found++;
+                        console.log(`🎯 SEARCH LEAD "${term}" → ${postId}`);
+                        const { error } = await supabase.from('leads').insert({
+                            post_id: postId,
+                            group_url: groupUrl,
+                            post_text: text.slice(0, 4000),
+                            status: 'approved',
+                        });
+                        if (error) console.log(`   ⚠️ lead insert: ${error.message}`);
+                        else {
+                            seen.add(String(postId));
+                            newLeadsThisCycle++;
+                        }
 
-                    if (fbEmail && BOT_ROLE !== 'scout') {
-                        try {
-                            console.log(`⚡ Immediately commenting on search lead ${postId}...`);
-                            await executeApprovedLeads(page, fbEmail);
-                            await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
-                        } catch (e: any) {
-                            console.error(`⚠️ Search comment pass failed: ${e.message?.slice(0, 120)}`);
+                        if (fbEmail && BOT_ROLE !== 'scout') {
+                            try {
+                                console.log(`⚡ Immediately commenting on search lead ${postId}...`);
+                                await executeApprovedLeads(page, fbEmail);
+                                await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
+                            } catch (e: any) {
+                                console.error(`⚠️ Search comment pass failed: ${e.message?.slice(0, 120)}`);
+                            }
                         }
                     }
-                    if (error) console.log(`   \u26a0\ufe0f lead insert: ${error.message}`);
-                    else newLeadsThisCycle++;
+
+                    if (searchSeen.size === before) stagnantSearchScrolls++;
+                    else stagnantSearchScrolls = 0;
+                    if (stagnantSearchScrolls >= 2) break;
+                    await page.mouse.wheel(0, 1500).catch(() => {});
+                    await randomDelay(1800, 4000);
                 }
             } catch (e: any) {
                 console.error(`\u26a0\ufe0f Search error (${term}): ${e.message?.slice(0, 90)}`);
