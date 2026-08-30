@@ -1569,7 +1569,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         for (let attempt = 1; attempt <= 9 && !inputReady; attempt++) {
             await commentPlaceholder.click({ timeout: 2500 }).catch(() => {});
             try { await commentInput.waitFor({ state: 'visible', timeout: 5000 }); } catch (e) {}
-            inputReady = await iv(commentInput);
+            inputReady = await commentInput.isVisible({ timeout: 1000 }).catch(() => false);
             if (!inputReady) {
                 await boosterPage.mouse.wheel(0, 400).catch(() => {});
                 await new Promise(r => setTimeout(r, 1500));
