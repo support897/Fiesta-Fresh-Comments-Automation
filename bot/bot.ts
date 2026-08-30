@@ -1461,7 +1461,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         console.log("⏸️ Website Booster disabled in accounts.config.json — skipping URL drop.");
         return;
     }
-    if (boosterRule && !(await accountMayComment(boosterRule.email, 'Website Booster'))) return;
+    if (boosterRule && !(await accountMayComment(boosterRule.email, 'account3'))) return;
     try {
         const { data: session } = await supabase
             .from('sessions')
@@ -1585,11 +1585,16 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
             // The old code printed "posted" right after Enter with no check —
             // that produced the false "✅" with no DB row since Aug 26.
             const proof = await captureCommentPermalink(boosterPage, targetUrl, boosterCommentText.trim());
+            // The booster comments on the SAME post ilse already commented on, and
+            // replies_log has UNIQUE(post_id, group_url) — storing the same group
+            // URL as ilse would collide and silently drop the account-3 row. Store
+            // the post-specific URL here so each account keeps its own row.
+            const boosterGroupUrl = groupUrl.includes('/posts/') ? groupUrl : targetUrl;
             if (!proof.verified) {
                 console.warn(`⚠️ Account 3 booster comment NOT confirmed on post ${postId} — logged unverified.`);
                 await supabase.from('replies_log').insert({
                     post_id: postId,
-                    group_url: groupUrl,
+                    group_url: boosterGroupUrl,
                     comment_id: `unverified_${Date.now()}`,
                     user_profile_id: 'account3',
                     replied_at: new Date()
@@ -1598,7 +1603,7 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
                 console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
                 const { error: replyErr } = await supabase.from('replies_log').insert({
                     post_id: postId,
-                    group_url: groupUrl,
+                    group_url: boosterGroupUrl,
                     comment_id: proof.url,
                     user_profile_id: 'account3',
                     replied_at: new Date()
