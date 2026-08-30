@@ -66,6 +66,12 @@
       "suites": ["agent-native"]
     },
     {
+      "id": "starlog",
+      "summary": "Vet packages and discover existing open-source libraries before writing code from scratch.",
+      "delivery": ["cli", "mcp"],
+      "suites": ["agent-native"]
+    },
+    {
       "id": "investigate-first",
       "summary": "Gather evidence and establish a credible mechanism before editing.",
       "delivery": ["native"],
@@ -162,7 +168,8 @@
       "caveman-discover",
       "caveman-evidence-review",
       "caveman-optimize",
-      "caveman-manage"
+      "caveman-manage",
+      "starlog"
     ],
     "local": [
       "caveman-explore",

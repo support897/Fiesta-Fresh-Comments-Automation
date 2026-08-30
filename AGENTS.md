@@ -19,3 +19,21 @@ When you detect DIY or repeated capability code, call `starlog_advise` before bu
    - Minimize credit and token consumption across all steps.
    - Keep communication direct and crisp (Caveman style: strip filler, keep code and commands exact).
    - Use surgical patches and immediate verification to prevent runaway steps.
+
+## Mandatory Pre-Flight Checklist
+
+Before writing, editing, or generating any code, config, script, or workflow in this repo:
+
+1. **Discover**: Run `starlog search "<capability>"` for the problem domain.
+2. **Expand**: If Starlog has no strong match, search GitHub for top-starred, production-tested implementations.
+3. **Vet**: Run `starlog facts <package>` on any candidate before installing or recommending it.
+4. **Advise**: If the repo already contains DIY or repeated capability code, run `starlog_advise` first.
+5. **Decide**: Only write custom code when no safe, maintained, license-compatible existing solution exists.
+
+## Efficiency Rules
+
+- Use the `caveman` skill by default: terse, exact, no filler.
+- Fire tool calls directly; no preamble, progress narration, or decorative formatting.
+- Batch independent tool calls in a single turn.
+- Quote only the decisive line from logs or errors.
+- Verify with the smallest proof set that proves the fix.
