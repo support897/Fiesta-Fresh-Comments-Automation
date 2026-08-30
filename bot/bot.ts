@@ -2981,26 +2981,10 @@ async function runBot(account: FbAccount): Promise<boolean> {
                     console.error(`⚠️ Commenter pass failed: ${e.message?.slice(0, 120)}`);
                 }
             }
-        } else if (FEED_MODE) {
-            await scanGroupsFeed(page, fbEmail);
-            // The per-group sweep is the backstop: Facebook ranks the combined
-            // feed, so it can hide posts. One full lap a night catches those
-            // while nothing else is competing for the box.
-            const hourBne = parseInt(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
-            const sweepHour = parseInt(process.env.NIGHTLY_SWEEP_HOUR || '1');
-            const today = new Date().toLocaleDateString('en-AU', { timeZone: 'Australia/Brisbane' });
-            if (hourBne === sweepHour && lastSweepDate !== today) {
-                lastSweepDate = today;
-                console.log(`\ud83c\udf19 Nightly backstop sweep of all groups (${today})...`);
-                await patrolGroups(page, fbEmail);
-                await searchGroupsForLeads(page);
-            }
         } else {
-            console.log("🔍 PHASE 2A: Targeted group search for cleaning requests...");
-            await searchGroupsForLeads(page, fbEmail);
-            console.log("📰 PHASE 2B: Combined groups feed scan...");
+            console.log("📰 PHASE 2A: Scanning combined groups feed...");
             await scanGroupsFeed(page, fbEmail);
-            console.log("🏡 PHASE 2C: Chronological group patrol...");
+            console.log("🏡 PHASE 2B: Patrolling active Gold Coast groups chronologically...");
             await patrolGroups(page, fbEmail);
         }
 
@@ -3182,14 +3166,9 @@ async function main() {
                 await sleep(retry);
                 continue;
             }
-            if (FEED_MODE) {
-                const poll = parseInt(process.env.FEED_POLL_SECONDS || '240') * 1000;
-                console.log(`🔄 Feed mode — next poll in ${Math.round(poll / 1000)}s.`);
-                await sleep(poll);
-                continue;
-            }
-            console.log(`🛌 Cycle done — resting ${Math.round(REST_MS / 60000)} min so cold-email gets the box.`);
-            await sleep(REST_MS);
+            const poll = parseInt(process.env.FEED_POLL_SECONDS || '60') * 1000;
+            console.log(`🔄 Next scan cycle in ${Math.round(poll / 1000)}s...`);
+            await sleep(poll);
         }
     })();
 
