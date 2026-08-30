@@ -1740,7 +1740,7 @@ try {
  * anything Facebook's ranking hid from this feed.
  */
 async function scanGroupsFeed(page: any, fbEmail?: string) {
-    const scrolls = parseInt(process.env.FEED_SCROLLS || '15');
+    const scrolls = parseInt(process.env.FEED_SCROLLS || '40');
     console.log(`\ud83d\udcf0 FEED: polling the combined groups feed (${scrolls} scrolls)...`);
 
     const ok = await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 3);
@@ -1887,7 +1887,7 @@ async function patrolGroups(page: any, fbEmail?: string) {
             await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
 
             let lastArticleCount = -1;
-            for (let scroll = 0; scroll < 3; scroll++) {
+            for (let scroll = 0; scroll < 6; scroll++) {
                 const posts = page.locator('[role="article"]');
                 const count = Math.min(await posts.count().catch(() => 0), 25);
                 for (let i = 0; i < count; i++) {
@@ -2986,6 +2986,11 @@ async function runBot(account: FbAccount): Promise<boolean> {
             await scanGroupsFeed(page, fbEmail);
             console.log("🏡 PHASE 2B: Patrolling active Gold Coast groups chronologically...");
             await patrolGroups(page, fbEmail);
+            // PHASE 3 was defined but never called — the biggest source of
+            // missed posts. Search finds the plain-text "need a cleaner" posts
+            // that Facebook's ranked feed and the 3-scroll patrol never show.
+            console.log("🔎 PHASE 3: Searching groups for cleaning-service keywords...");
+            await searchGroupsForLeads(page, fbEmail);
         }
 
     } catch (e) {
@@ -3075,6 +3080,13 @@ async function main() {
             for (let i = 0; i < ACCOUNTS.length; i++) {
                 const account = nextAccount();
                 if (!account) continue;
+                // url_drop accounts (Account 3 Website Booster) must NEVER run a
+                // patrol cycle or post a main reply. They only fire via
+                // postWebsiteUrlBoosterReply after a main_reply comment lands.
+                if (ruleFor(account.email)?.role === 'url_drop') {
+                    console.log(`⏭️ ${account.email} is URL-drop only — skipping patrol cycle (booster fires after main replies).`);
+                    continue;
+                }
                 console.log(`👤 Testing rotation account: ${account.email}`);
                 success = await runBot(account);
                 if (success) {
