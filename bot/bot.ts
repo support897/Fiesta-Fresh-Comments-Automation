@@ -387,8 +387,8 @@ function realReplies(rows: any[] | null | undefined): any[] {
  * Doubles as a post-verification: if we cannot see our comment on the page at
  * all, the caller knows the Enter keypress did not actually publish anything.
  */
-async function captureCommentPermalink(page: any, fallbackUrl: string): Promise<{ url: string; verified: boolean }> {
-    const MARKER = '200% Happiness Guarantee';
+async function captureCommentPermalink(page: any, fallbackUrl: string, marker?: string): Promise<{ url: string; verified: boolean }> {
+    const MARKER = marker || '200% Happiness Guarantee';
     for (let attempt = 0; attempt < 3; attempt++) {
         await new Promise(r => setTimeout(r, 2500));
         try {
@@ -1578,25 +1578,42 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
 
         if (inputReady) {
             await commentInput.click({ force: true }).catch(() => {});
-            await boosterPage.keyboard.insertText(boosterCommentText);
+            await typeComment(boosterPage, boosterCommentText);
             await boosterPage.keyboard.press('Enter');
-            console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
 
-            const boosterProof = await boosterPage.evaluate(() => {
-                const a = Array.from(document.querySelectorAll('a[href*="comment_id="]'))
-                    .map(el => (el as HTMLAnchorElement).href);
-                const last = a[a.length - 1];
-                return last ? (last.split('&__cft')[0] || last) : '';
-            }).catch(() => '');
+            // Verify the URL comment actually landed before logging as posted.
+            // The old code printed "posted" right after Enter with no check —
+            // that produced the false "✅" with no DB row since Aug 26.
+            const proof = await captureCommentPermalink(boosterPage, targetUrl, boosterCommentText.trim());
+            if (!proof.verified) {
+                console.warn(`⚠️ Account 3 booster comment NOT confirmed on post ${postId} — logged unverified.`);
+                await supabase.from('replies_log').insert({
+                    post_id: postId,
+                    group_url: groupUrl,
+                    comment_id: `unverified_${Date.now()}`,
+                    user_profile_id: 'account3',
+                    replied_at: new Date()
+                });
+            } else {
+                console.log(`✅ Account 3 Website URL booster comment posted on post ${postId}!`);
+                const { error: replyErr } = await supabase.from('replies_log').insert({
+                    post_id: postId,
+                    group_url: groupUrl,
+                    comment_id: proof.url,
+                    user_profile_id: 'account3',
+                    replied_at: new Date()
+                });
+                if (replyErr) console.warn(`⚠️ Booster replies_log insert failed: ${replyErr.message}`);
+            }
+        } else {
+            console.warn(`⚠️ Booster comment box not found on post ${postId}.`);
             await supabase.from('replies_log').insert({
                 post_id: postId,
                 group_url: groupUrl,
-                comment_id: `booster_${boosterProof || targetUrl}`,
-                user_profile_id: 'Website Booster',
+                comment_id: `booster_nofield_${Date.now()}`,
+                user_profile_id: 'account3',
                 replied_at: new Date()
             });
-        } else {
-            console.warn(`⚠️ Booster comment box not found on post ${postId}.`);
         }
         await boosterContext.close();
         await boosterBrowser.close();
