@@ -1072,6 +1072,14 @@ async function randomDelay(min: number = 800, max: number = 2500) {
     await new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Discovery should not imitate human typing or pacing. Keep a switch for
+// rollback, but default to zero artificial crawler delay; comment actions use
+// their own deliberate pacing below.
+const CRAWLER_NO_DELAY = process.env.CRAWLER_NO_DELAY !== 'false';
+async function crawlerDelay(min: number, max: number) {
+    if (!CRAWLER_NO_DELAY) await randomDelay(min, max);
+}
+
 /** Longer cool-down between write actions (comments), in seconds. */
 async function coolDown(label: string) {
     const min = parseInt(process.env.COMMENT_DELAY_MIN_SECONDS || '45');
@@ -1642,7 +1650,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
     const postUrls: string[] = [];
     try {
         await page.goto("https://www.facebook.com/notifications", { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
-        await new Promise(r => setTimeout(r, 4000));
+        await crawlerDelay(4000, 4000);
         
         // Wait for notification list
         await page.waitForSelector('[role="main"]', { timeout: 10000 }).catch(() => {});
@@ -1650,7 +1658,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
         // Scroll a few times to load recent notifications
         for(let i=0; i<3; i++) {
             await page.mouse.wheel(0, 1000);
-            await new Promise(r => setTimeout(r, 1000));
+            await crawlerDelay(1000, 1000);
         }
 
         // Find notification elements. Often they are links.
@@ -1786,7 +1794,7 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
 
     const ok = await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 3);
     if (!ok) { console.warn('   \u23ed\ufe0f Groups feed would not load through the proxy this pass.'); return; }
-    await randomDelay(2500, 5000);
+    await crawlerDelay(2500, 5000);
 
     // The feed hydrates slowly over the home exit node: the first poll read 0
     // posts because the articles had not mounted inside the old 20s wait. Poll
@@ -1796,7 +1804,7 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
         mounted = await page.locator('[role="article"]').count().catch(() => 0);
         if (mounted === 0) {
             await page.mouse.wheel(0, 600).catch(() => {});
-            await new Promise(r => setTimeout(r, 5000));
+            await crawlerDelay(5000, 5000);
         }
     }
     if (mounted === 0) {
@@ -1864,11 +1872,11 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
                 }
                 // executeApprovedLeads navigates away; come back to the feed.
                 await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 2);
-                await randomDelay(2000, 4000);
+                await crawlerDelay(2000, 4000);
             }
         }
         await page.mouse.wheel(0, 1600).catch(() => {});
-        await randomDelay(1800, 4000);
+        await crawlerDelay(1800, 4000);
     }
     console.log(`\ud83d\udcf0 FEED: ${scanned} post(s) read, ${found} new lead(s).`);
 }
@@ -1924,7 +1932,7 @@ async function patrolGroups(page: any, fbEmail?: string) {
                 : groupUrl;
             const groupOk = await gotoWithRetry(page, chronoUrl, 'group', 3);
             if (!groupOk) { console.warn(`   \u23ed\ufe0f Skipping ${groupUrl.slice(0, 60)} — proxy would not carry it.`); continue; }
-            await randomDelay(2500, 5000);
+            await crawlerDelay(2500, 5000);
             await page.waitForSelector('[role="feed"], [role="article"]', { timeout: 12000 }).catch(() => {});
 
             const observedPostIds = new Set<string>();
@@ -1969,9 +1977,9 @@ async function patrolGroups(page: any, fbEmail?: string) {
                 // appended more articles to the DOM.
                 if (stagnantScrolls >= 2) break;
                 await page.mouse.wheel(0, 1400).catch(() => {});
-                await randomDelay(1800, 4000);
+                await crawlerDelay(1800, 4000);
             }
-            await randomDelay(4000, 9000); // pace between groups
+            await crawlerDelay(4000, 9000);
 
             // Comment on anything this group just produced, immediately, rather
             // than at the end of a multi-hour sweep.
@@ -2133,7 +2141,7 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
             const searchUrl = `${base}/search/?q=${encodeURIComponent(term)}`;
             try {
                 await page.goto(searchUrl, { waitUntil: 'commit', timeout: 30000 });
-                await randomDelay(3000, 6000);
+                await crawlerDelay(3000, 6000);
                 if (!await sessionStillAlive(page)) return;
                 await page.waitForSelector('[role="article"]', { timeout: 12000 }).catch(() => {});
 
@@ -2189,12 +2197,12 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
                     else stagnantSearchScrolls = 0;
                     if (stagnantSearchScrolls >= 2) break;
                     await page.mouse.wheel(0, 1500).catch(() => {});
-                    await randomDelay(1800, 4000);
+                    await crawlerDelay(1800, 4000);
                 }
             } catch (e: any) {
                 console.error(`\u26a0\ufe0f Search error (${term}): ${e.message?.slice(0, 90)}`);
             }
-            await randomDelay(5000, 11000); // pace searches — this is the risky surface
+            await crawlerDelay(5000, 11000);
         }
     }
     console.log(`\u2705 PHASE 3 search complete — ${found} new lead(s).`);
@@ -2905,7 +2913,7 @@ async function runBot(account: FbAccount): Promise<boolean> {
             console.log(`\n🔔 Processing notification post: ${url}`);
             try {
                 await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-                await randomDelay(2000, 3000);
+                await crawlerDelay(2000, 3000);
 
                 // Resolve the ID from the notification URL before reading text.
                 // Multi-permalink notifications can render several articles; the
