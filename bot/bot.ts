@@ -376,7 +376,13 @@ function passwordAttemptAllowed(email: string): boolean {
 }
 
 function realReplies(rows: any[] | null | undefined): any[] {
-    return (rows || []).filter(r => !String(r?.comment_id || '').startsWith('dryrun_'));
+    return (rows || []).filter(r => {
+        const id = String(r?.comment_id || '');
+        // Only a captured Facebook permalink is proof that a comment landed.
+        // Failed attempts and legacy/test rows must not block a retry or inflate
+        // the posted count.
+        return id.startsWith('http');
+    });
 }
 
 /**
