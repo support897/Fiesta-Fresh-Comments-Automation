@@ -10,24 +10,28 @@ ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI
 
 ACCOUNTS = [
     {"email": "ilse2taylor@gmail.com", "label": "Account 1 (ilse2taylor@gmail.com)"},
+    {"email": "projects.reports.ilse@gmail.com", "label": "Account 2 (projects.reports.ilse@gmail.com) - currently paused"},
     {"email": "account3", "label": "Account 3 (Website URL Booster)"}
 ]
+VALID_CHOICES = [str(i + 1) for i in range(len(ACCOUNTS))]
 
 def main():
     print("=" * 60)
     print("  🌐 FIESTA FRESH - FACEBOOK SESSION PRIMER & COOKIE SAVER")
     print("=" * 60)
-    
-    idx = 1
-    if len(sys.argv) > 1 and sys.argv[1] in ["1", "2", "3"]:
+
+    idx = 2  # default: Account 3, the one that actually needs re-priming
+    if len(sys.argv) > 1 and sys.argv[1] in VALID_CHOICES:
         idx = int(sys.argv[1]) - 1
     else:
         print("Select account to log in:")
         for i, acc in enumerate(ACCOUNTS):
             print(f"  [{i + 1}] {acc['label']}")
-        choice = input("\nEnter number (1-3) [default 2]: ").strip()
-        if choice in ["1", "2", "3"]:
+        choice = input(f"\nEnter number (1-{len(ACCOUNTS)}) [default 3]: ").strip()
+        if choice in VALID_CHOICES:
             idx = int(choice) - 1
+        elif choice != "":
+            print(f"⚠️ '{choice}' is not a valid option — defaulting to Account 3.")
 
     target_email = ACCOUNTS[idx]["email"]
     print(f"\n🚀 Opening browser for: {target_email}...")
