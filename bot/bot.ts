@@ -1346,6 +1346,7 @@ async function readTargetPostText(page: any, targetPostId?: string): Promise<str
     const articleCount = await articles.count().catch(() => 0);
     if (articleCount > 0) {
         if (targetPostId) {
+            let matched = false;
             for (let i = 0; i < articleCount; i++) {
                 const article = articles.nth(i);
                 // Do not call the full permalink extractor here: its fallback
@@ -1358,7 +1359,15 @@ async function readTargetPostText(page: any, targetPostId?: string): Promise<str
                         (el.getAttribute('href') || '').includes(id) || (el.getAttribute('data-ft') || '').includes(id));
                 }, targetPostId).catch(() => false);
                 if (!containsTarget) continue;
+                matched = true;
                 const text = await extractMainPostBody(article);
+                if (text && text.length >= 15 && !looksLikePageChrome(text)) return text;
+            }
+            // A canonical /posts/<id> page normally has one article, but
+            // Facebook may omit the ID from that article's rendered HTML.
+            // The URL already identifies the exact post, so do not discard it.
+            if (!matched && articleCount === 1) {
+                const text = await extractMainPostBody(articles.first());
                 if (text && text.length >= 15 && !looksLikePageChrome(text)) return text;
             }
         } else {
@@ -1566,7 +1575,10 @@ async function postWebsiteUrlBoosterReply(groupUrl: string, postId: string) {
         const isNumericId = /^\d+$/.test(String(postId));
         let targetUrl = groupUrl;
         if (isNumericId) {
-            if (groupUrl.includes('/share/g/')) {
+            if (/\/posts\/\d+/.test(groupUrl)) {
+                // Notification targets may already be canonical post URLs.
+                targetUrl = groupUrl.split('?')[0]!;
+            } else if (groupUrl.includes('/share/g/')) {
                 await boosterPage.goto(groupUrl, { waitUntil: 'commit', timeout: 30000 });
                 await new Promise(r => setTimeout(r, 1500));
                 const resolvedUrl = new URL(boosterPage.url());
@@ -1693,7 +1705,7 @@ async function scanFacebookNotifications(page: any): Promise<string[]> {
                     // rather than silently discarding all but the first.
                     for (const postId of decodeURIComponent(multiPermalinks).split(',').map(id => id.trim()).filter(Boolean)) {
                         const target = new URL(urlObj.toString());
-                        target.searchParams.set('multi_permalinks', postId);
+                        target.pathname = `${target.pathname.replace(/\/$/, '')}/posts/${postId}`;
                         const targetUrl = target.toString();
                         if (!postUrls.includes(targetUrl)) postUrls.push(targetUrl);
                     }
