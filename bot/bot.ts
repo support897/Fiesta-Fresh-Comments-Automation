@@ -1880,7 +1880,7 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
             // Comment on it right now, while it is minutes old.
             if (fbEmail && BOT_ROLE !== 'scout') {
                 try {
-                    await executeApprovedLeads(page, fbEmail);
+                    await executeApprovedLeads(page, fbEmail, postId);
                 } catch (e: any) {
                     console.error(`   \u26a0\ufe0f Immediate comment pass failed: ${e.message?.slice(0, 120)}`);
                 }
@@ -2199,7 +2199,7 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
                         if (fbEmail && BOT_ROLE !== 'scout') {
                             try {
                                 console.log(`⚡ Immediately commenting on search lead ${postId}...`);
-                                await executeApprovedLeads(page, fbEmail);
+                                await executeApprovedLeads(page, fbEmail, postId);
                                 await page.goto(searchUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
                             } catch (e: any) {
                                 console.error(`⚠️ Search comment pass failed: ${e.message?.slice(0, 120)}`);
@@ -2232,9 +2232,11 @@ async function searchGroupsForLeads(page: any, fbEmail?: string) {
  * Now the patrol calls this as soon as it finds something, and the per-account
  * throttles in accounts.config.json do the pacing.
  */
-async function executeApprovedLeads(page: any, fbEmail: string) {
+async function executeApprovedLeads(page: any, fbEmail: string, targetPostId?: string) {
         // PHASE 1: Execute leads (auto-approved by Gemini/Groq, zero human input needed)
-        const { data: rawLeads } = await supabase.from('leads').select('*').eq('status', 'approved');
+        let leadQuery = supabase.from('leads').select('*').eq('status', 'approved');
+        if (targetPostId) leadQuery = leadQuery.eq('post_id', targetPostId);
+        const { data: rawLeads } = await leadQuery;
         
         // Fetch replies_log to filter out already executed leads (RLS update proof)
         const { data: postedReplies } = await supabase.from('replies_log').select('post_id, comment_id');
