@@ -1982,6 +1982,15 @@ async function patrolGroups(page: any, fbEmail?: string) {
                     else {
                         seen.add(String(postId));
                         newLeadsThisCycle++;
+                        if (fbEmail && BOT_ROLE !== 'scout') {
+                            try {
+                                console.log(`Immediately commenting on patrol lead ${postId}...`);
+                                await executeApprovedLeads(page, fbEmail, postId);
+                                await gotoWithRetry(page, chronoUrl, 'group patrol', 2);
+                            } catch (e: any) {
+                                console.error(`Patrol comment pass failed: ${e.message?.slice(0, 120)}`);
+                            }
+                        }
                     }
                 }
                 if (observedPostIds.size === before) stagnantScrolls++;
