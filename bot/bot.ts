@@ -1348,8 +1348,16 @@ async function readTargetPostText(page: any, targetPostId?: string): Promise<str
         if (targetPostId) {
             for (let i = 0; i < articleCount; i++) {
                 const article = articles.nth(i);
-                const articleId = await extractFacebookPostId(article);
-                if (articleId !== targetPostId) continue;
+                // Do not call the full permalink extractor here: its fallback
+                // selectors can wait 30s each on a partially hydrated article.
+                // Notification pages already give us the target ID, so inspect
+                // the article DOM directly and only run the extractor if it hits.
+                const containsTarget = await article.evaluate((node: HTMLElement, id: string) => {
+                    if (node.innerHTML.includes(id)) return true;
+                    return Array.from(node.querySelectorAll('a[href], [data-ft]')).some(el =>
+                        (el.getAttribute('href') || '').includes(id) || (el.getAttribute('data-ft') || '').includes(id));
+                }, targetPostId).catch(() => false);
+                if (!containsTarget) continue;
                 const text = await extractMainPostBody(article);
                 if (text && text.length >= 15 && !looksLikePageChrome(text)) return text;
             }
