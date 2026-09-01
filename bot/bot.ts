@@ -1450,7 +1450,14 @@ Examples of NO (False Positives or Wrong Location):
 Post text to evaluate:
 "${postText}"`;
 
-        const result = await model.generateContent(prompt);
+        // No timeout on this call previously — a slow/hung Gemini request
+        // could stall an entire scan cycle with zero log output, which looks
+        // identical to (and can cause) a missed lead. Cap it and fall back to
+        // rejecting rather than blocking the whole bot.
+        const result: any = await Promise.race([
+            model.generateContent(prompt),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('Gemini call timed out after 15s')), 15000)),
+        ]);
         const response = result.response.text().trim().toUpperCase();
         
         console.log(`🧠 Gemini Evaluation Result: ${response}`);
@@ -1796,6 +1803,24 @@ let newLeadsThisCycle = 0;
 /** Feed-first discovery; set FEED_MODE=0 to fall back to per-group sweeping. */
 const FEED_MODE = process.env.FEED_MODE !== '0';
 let lastSweepDate = '';
+// The full per-group patrol (Phase 2B) was firing on EVERY cycle regardless of
+// how recently it last ran — with GROUPS_PER_CYCLE=104 that turned a single
+// cycle into a 20-40 minute slog, starving the fast feed/search/notification
+// passes that actually catch a fresh "looking for a cleaner" post in seconds.
+// Phase 2B is a backstop for whatever the feed's ranking hides, not the
+// primary discovery path, so gate it to run at most once per interval and let
+// the fast phases repeat freely in between.
+const lastPatrolFile = path.join(__dirname, '.last_patrol_at');
+let lastPatrolAt = 0;
+try { lastPatrolAt = parseInt(fs.readFileSync(lastPatrolFile, 'utf8').trim()) || 0; } catch { /* first run */ }
+const PATROL_INTERVAL_MS = parseInt(process.env.PATROL_INTERVAL_MINUTES || '60') * 60 * 1000;
+function patrolDueNow(): boolean {
+    return Date.now() - lastPatrolAt >= PATROL_INTERVAL_MS;
+}
+function markPatrolRan() {
+    lastPatrolAt = Date.now();
+    try { fs.writeFileSync(lastPatrolFile, String(lastPatrolAt), 'utf8'); } catch { /* ignore */ }
+}
 let groupCursor = 0;
 const groupCursorFile = path.join(__dirname, 'group_cursor.txt');
 try {
@@ -1849,13 +1874,25 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
 
     let found = 0;
     let scanned = 0;
+    // The feed used to re-extract and re-classify the SAME visible articles on
+    // every scroll tick (including repeat Gemini calls on the same "unsure"
+    // post), which silently burned the whole scroll budget — and every minute
+    // of that is a minute a real "looking for a cleaner" post sits unanswered
+    // elsewhere. Track identities seen THIS run and bail out once two scrolls
+    // in a row add nothing new, same as the group patrol below.
+    const scannedThisRun = new Set<string>();
+    let stagnantScrolls = 0;
     for (let scroll = 0; scroll < scrolls; scroll++) {
         const posts = page.locator('[role="article"]');
         const count = Math.min(await posts.count().catch(() => 0), 30);
+        const beforeSize = scannedThisRun.size;
         for (let i = 0; i < count; i++) {
             const el = posts.nth(i);
             const text = await extractMainPostBody(el);
             if (!text || text.length < 25) continue;
+            const fingerprint = text.slice(0, 80);
+            if (scannedThisRun.has(fingerprint)) continue;
+            scannedThisRun.add(fingerprint);
             scanned++;
 
             const decision = quickKeywordFilter(text);
@@ -1900,6 +1937,12 @@ async function scanGroupsFeed(page: any, fbEmail?: string) {
                 await gotoWithRetry(page, 'https://www.facebook.com/groups/feed/', 'groups feed', 2);
                 await crawlerDelay(2000, 4000);
             }
+        }
+        if (scannedThisRun.size === beforeSize) stagnantScrolls++;
+        else stagnantScrolls = 0;
+        if (stagnantScrolls >= 2) {
+            console.log(`   \u23ed\ufe0f Feed stopped growing after ${scroll + 1} scroll(s) — moving on instead of burning the rest of the budget.`);
+            break;
         }
         await page.mouse.wheel(0, 1600).catch(() => {});
         await crawlerDelay(1800, 4000);
@@ -3096,8 +3139,14 @@ async function runBot(account: FbAccount): Promise<boolean> {
             await searchGroupsForLeads(page, fbEmail);
             console.log("📰 PHASE 2A: Scanning combined groups feed...");
             await scanGroupsFeed(page, fbEmail);
-            console.log("🏡 PHASE 2B: Patrolling active Gold Coast groups chronologically...");
-            await patrolGroups(page, fbEmail);
+            if (patrolDueNow()) {
+                console.log("🏡 PHASE 2B: Patrolling active Gold Coast groups chronologically...");
+                await patrolGroups(page, fbEmail);
+                markPatrolRan();
+            } else {
+                const mins = Math.round((PATROL_INTERVAL_MS - (Date.now() - lastPatrolAt)) / 60000);
+                console.log(`🏡 PHASE 2B: Skipped — full patrol ran within the last ${Math.round(PATROL_INTERVAL_MS / 60000)} min (next due in ~${mins} min). Fast phases keep running every cycle.`);
+            }
         }
 
     } catch (e) {
