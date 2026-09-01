@@ -2990,12 +2990,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
         const notificationUrls = await scanFacebookNotifications(page);
         
         for (const url of notificationUrls) {
-            console.log(`\n🔔 Processing notification post: ${url}`);
             try {
-                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-                await crawlerDelay(2000, 3000);
-
-                // Resolve the ID from the notification URL before reading text.
+                // Resolve the ID from the notification URL BEFORE navigating.
                 // Multi-permalink notifications can render several articles; the
                 // first article is not necessarily the requested post.
                 let postID: string | null = null;
@@ -3006,6 +3002,29 @@ async function runBot(account: FbAccount): Promise<boolean> {
                     const multiMatch = url.match(/multi_permalinks=([^&]+)/);
                     if (multiMatch?.[1]) postID = decodeURIComponent(multiMatch[1]).split(',')[0] || null;
                 }
+
+                // Skip the expensive page load entirely if we already have a
+                // logged reply for this post ID. Previously this check ran
+                // AFTER a full navigation + 15s selector wait + text read, so
+                // every already-answered post burned 60-120s of proxy-bound
+                // page-load time every single cycle — time stolen from posts
+                // that were actually new. Checking first with the ID parsed
+                // straight from the URL costs a cheap DB lookup instead.
+                if (postID) {
+                    const { data: alreadyReplied } = await supabase
+                        .from('replies_log')
+                        .select('post_id')
+                        .eq('post_id', postID)
+                        .maybeSingle();
+                    if (alreadyReplied) {
+                        console.log(`⏭️ Notification post ${postID} already replied. Skipping (no page load).`);
+                        continue;
+                    }
+                }
+
+                console.log(`\n🔔 Processing notification post: ${url}`);
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+                await crawlerDelay(2000, 3000);
 
                 // Wait for the POST itself, never the page shell. The old code
                 // fell back to [role="main"] — the whole main column — so the
@@ -3024,15 +3043,19 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 const textHash = cleanText.substring(0, 40);
                 postID = postID || `hash_${textHash}`;
 
-                const { data: alreadyReplied } = await supabase
-                    .from('replies_log')
-                    .select('*')
-                    .eq('post_id', postID)
-                    .maybeSingle();
-                
-                if (alreadyReplied) {
-                    console.log("   ⏭️ Already replied to this post. Skipping.");
-                    continue;
+                // Re-check by content hash for posts whose IDs couldn't be
+                // parsed from the URL (fallback hash_ id) — the URL-based check
+                // above only covers posts with a real numeric post ID.
+                if (postID.startsWith('hash_')) {
+                    const { data: alreadyRepliedByHash } = await supabase
+                        .from('replies_log')
+                        .select('post_id')
+                        .eq('post_id', postID)
+                        .maybeSingle();
+                    if (alreadyRepliedByHash) {
+                        console.log("   ⏭️ Already replied to this post. Skipping.");
+                        continue;
+                    }
                 }
 
                 const quickDecision = quickKeywordFilter(postText);
