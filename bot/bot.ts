@@ -2682,10 +2682,18 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 // Facebook sometimes shows a profile-selector ("Use another profile")
                 // instead of the email/password form. Click through to reveal the form.
                 try {
-                    const useAnother = page.locator('button:has-text("Use another profile"), div[role="button"]:has-text("Use another profile")').first();
-                    if (await useAnother.isVisible({ timeout: 5000 }).catch(() => false)) {
-                        console.log('👤 Clicking "Use another profile" to reveal login form...');
-                        await useAnother.click();
+                    const clicked = await page.evaluate(() => {
+                        const els = Array.from(document.querySelectorAll('*'));
+                        const btn = els.find(e =>
+                            e.children.length === 0 &&
+                            e.textContent?.trim() === 'Use another profile' &&
+                            e.getBoundingClientRect().width > 50
+                        );
+                        if (btn) { (btn as HTMLElement).click(); return true; }
+                        return false;
+                    }).catch(() => false);
+                    if (clicked) {
+                        console.log('👤 Clicked "Use another profile" to reveal login form...');
                         await randomDelay(2000, 3000);
                     }
                 } catch (e) { /* no profile selector, continue */ }
