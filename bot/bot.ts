@@ -2674,6 +2674,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 }
                 // Clear existing session context cookies to get a clean slate
                 await context.clearCookies();
+                // Facebook also identifies the browser via localStorage/sessionStorage
+                // (not cleared by clearCookies) — wipe those too or the profile
+                // selector appears instead of the login form.
+                try {
+                    await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+                } catch (e) { /* no page yet */ }
                 // waitUntil:'commit' returns the moment the first byte lands, so on
                 // a flaky proxy the login page was still an empty document when we
                 // looked for the fields — the re-login "failed" without ever seeing
@@ -3337,6 +3343,9 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
   }
   console.log(`🔑 Auto-relogin: attempting fresh login for ${accountKey}...`);
   try {
+    // Clear cookies + storage for a clean slate (else profile selector appears).
+    await context.clearCookies().catch(() => {});
+    try { await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); }); } catch (e) {}
     await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 30000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2500));
     // Profile-selector ("Use another profile") instead of the form — click through.
