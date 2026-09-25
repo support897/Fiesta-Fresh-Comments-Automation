@@ -9,227 +9,10 @@ import path from 'path';
 import http from 'http';
 import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import nodemailer from 'nodemailer';
-
-async function sendAlertEmail(subject: string, text: string) {
-    const user = process.env.ALERT_EMAIL;
-    const pass = process.env.ALERT_EMAIL_PASSWORD;
-    if (!user || !pass) return;
-    
-    try {
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: { user, pass }
-        });
-        await transporter.sendMail({ from: user, to: user, subject, text });
-        console.log(`📧 Alert email sent: ${subject}`);
-    } catch (e: any) {
-        console.error("⚠️ Failed to send alert email:", e.message);
-    }
-}
-
 import * as fs from 'fs';
-let lastDailyReportDate = '';
-let reportFilePath = '';
-
-async function sendDailyReportEmail() {
-    const user = process.env.ALERT_EMAIL;
-    const pass = process.env.ALERT_EMAIL_PASSWORD;
-    if (!user || !pass) {
-        console.warn("\u26a0\ufe0f ALERT_EMAIL / ALERT_EMAIL_PASSWORD not set — skipping daily report.");
-        return;
-    }
-
-    try {
-        const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { data: replies } = await supabase
-            .from('replies_log')
-            .select('*')
-            .gte('replied_at', twentyFourHoursAgo)
-            .order('replied_at', { ascending: false });
-
-        // Exclude legacy dryrun_ rows so the report counts only real comments.
-        const realList = realReplies(replies);
-        const totalReplies = realList.length;
-        const groupCount = new Set(realList.map((r: any) => r.group_url)).size;
-
-        // Real account health, rather than the old hardcoded "3 / 3".
-        let liveAccounts = 0;
-        try {
-            const { data: sess } = await supabase.from('sessions').select('user_email, cookies');
-            for (const acct of ACCOUNTS) {
-                const row = (sess || []).find((x: any) => x.user_email === acct.email);
-                const jar = Array.isArray(row?.cookies) ? row.cookies : [];
-                if (jar.some((c: any) => c?.name === 'c_user' && c?.value)) liveAccounts++;
-            }
-        } catch { liveAccounts = 0; }
-
-        const tableRows = realList.map((r: any) => {
-            const timeStr = new Date(r.replied_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
-            // Only the booster tags itself in comment_id. For everything else we
-            // genuinely do not know which account posted, so say so rather than
-            // inventing a name by alternating rows (the old behaviour).
-            const accountBadge = r.comment_id?.startsWith('booster_')
-                ? '<span style="background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">Account 3 (Booster)</span>'
-                : `<span style="background:#f1f5f9;color:#475569;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:600;">${r.user_profile_id || 'Patrol account'}</span>`;
-
-            // Prefer the captured comment permalink (stored in comment_id) so the
-            // "View Post" button lands on the actual comment, not just the group.
-            const rawProof = String(r.comment_id || '').replace(/^booster_/, '');
-            const postUrl = rawProof.startsWith('http') ? rawProof : buildPostUrl(r.group_url, r.post_id);
-            const groupName = r.group_url.replace('https://www.facebook.com/groups/', '').replace(/\/$/, '');
-
-            return `
-            <tr style="border-bottom: 1px solid #f1f5f9;">
-                <td style="padding: 14px; font-size: 13px; color: #475569; font-weight: 500;">${timeStr}</td>
-                <td style="padding: 14px;">${accountBadge}</td>
-                <td style="padding: 14px; font-size: 13px; color: #0284c7; font-weight: 600; max-width: 240px; word-break: break-all;">
-                    <a href="${postUrl}" target="_blank" style="color: #0284c7; text-decoration: none;">${groupName}</a>
-                </td>
-                <td style="padding: 14px; text-align: right;">
-                    <a href="${postUrl}" target="_blank" style="background: #0284c7; color: #ffffff; text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; display: inline-block;">View Post ↗</a>
-                </td>
-            </tr>`;
-        }).join('');
-
-        const emptyMessage = `
-        <tr>
-            <td colspan="4" style="padding: 30px; text-align: center; color: #94a3b8; font-size: 14px;">
-                No automated comments posted in the last 24 hours. The bot is actively patrolling target groups 24/7.
-            </td>
-        </tr>`;
-
-        const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Fiesta Fresh 6 PM Daily Activity Report</title>
-        </head>
-        <body style="margin:0; padding:0; background-color:#f8fafc; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#f8fafc; padding: 20px 0;">
-                <tr>
-                    <td align="center">
-                        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background-color:#ffffff; border-radius:16px; overflow:hidden; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
-                            <!-- Header -->
-                            <tr>
-                                <td style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); padding: 32px 28px; text-align: center;">
-                                    <h1 style="color:#ffffff; margin:0; font-size:24px; font-weight:800; letter-spacing:-0.5px;">Fiesta Fresh Cleaning 💙</h1>
-                                    <p style="color:#e0f2fe; margin:8px 0 0 0; font-size:14px; font-weight:500;">Daily Automation Activity Report • 6:00 PM</p>
-                                </td>
-                            </tr>
-
-                            <!-- Metrics -->
-                            <tr>
-                                <td style="padding: 24px 28px; background-color: #f1f5f9; border-bottom: 1px solid #e2e8f0;">
-                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                                        <tr>
-                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
-                                                <div style="font-size: 24px; font-weight: 800; color: #0284c7;">${totalReplies}</div>
-                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Comments Posted</div>
-                                            </td>
-                                            <td width="5%"></td>
-                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
-                                                <div style="font-size: 24px; font-weight: 800; color: #10b981;">${groupCount}</div>
-                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Groups Reached</div>
-                                            </td>
-                                            <td width="5%"></td>
-                                            <td width="30%" align="center" style="padding: 12px; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0;">
-                                                <div style="font-size: 24px; font-weight: 800; color: #8b5cf6;">${liveAccounts} / ${ACCOUNTS.length}</div>
-                                                <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-top: 2px;">Active Accounts</div>
-                                            </td>
-                                        </tr>
-                                    </table>
-                                </td>
-                            </tr>
-
-                            <!-- Content Table -->
-                            <tr>
-                                <td style="padding: 24px 28px;">
-                                    <h3 style="margin: 0 0 16px 0; color: #1e293b; font-size: 16px; font-weight: 700;">Comments Posted Today</h3>
-                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
-                                        <thead>
-                                            <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0;">
-                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Time</th>
-                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Account</th>
-                                                <th style="padding: 10px 14px; text-align: left; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Target Group</th>
-                                                <th style="padding: 10px 14px; text-align: right; font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700;">Link</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            ${totalReplies > 0 ? tableRows : emptyMessage}
-                                        </tbody>
-                                    </table>
-                                </td>
-                            </tr>
-
-                            <!-- Footer -->
-                            <tr>
-                                <td style="background-color: #f8fafc; padding: 20px 28px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                                    <p style="margin: 0;">Fiesta Fresh Cleaning Automation System • 24/7 Patrol Daemon</p>
-                                    <p style="margin: 6px 0 0 0;"><a href="https://fiesta-comments-dashboard.vercel.app" target="_blank" style="color: #0284c7; text-decoration: none; font-weight: 600;">Open Live Vercel Dashboard ↗</a></p>
-                                </td>
-                            </tr>
-                        </table>
-                    </td>
-                </tr>
-            </table>
-        </body>
-        </html>`;
-
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: { user, pass }
-        });
-
-        await transporter.sendMail({
-            from: `"Fiesta Fresh Automation 💙" <${user}>`,
-            to: user,
-            subject: `Fiesta Fresh 6 PM Daily Report: ${totalReplies} Comments Posted`,
-            html
-        });
-        console.log(`📧 Daily 6 PM report sent successfully to ${user}!`);
-    } catch (e: any) {
-        console.error("⚠️ Failed to send daily report email:", e.message);
-    }
-}
-
-async function checkAndSendDailyReport() {
-    try {
-        const now = new Date();
-        // Explicitly get hour and date in Australia/Brisbane timezone (Gold Coast/Brisbane)
-        const currentHour = parseInt(now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
-        const todayStr = now.toLocaleDateString('en-US', { timeZone: 'Australia/Brisbane' });
-
-        // >= 18 so a restart or a missed 18:00 tick still delivers today's report.
-        if (currentHour >= 18 && lastDailyReportDate !== todayStr) {
-            lastDailyReportDate = todayStr;
-            try {
-                fs.writeFileSync(reportFilePath, todayStr, 'utf8');
-            } catch (err) {
-                console.error("⚠️ Failed to write last_report_date.txt:", err);
-            }
-            console.log("📊 Triggering Daily 6:00 PM Fiesta Fresh Gmail Report...");
-            await sendDailyReportEmail();
-        }
-    } catch (e: any) {
-        console.error("⚠️ Error checking daily report trigger:", e.message);
-    }
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Initialize file persistence variables after __dirname is declared
-reportFilePath = path.join(__dirname, 'last_report_date.txt');
-try {
-    if (fs.existsSync(reportFilePath)) {
-        lastDailyReportDate = fs.readFileSync(reportFilePath, 'utf8').trim();
-    }
-} catch (e) {
-    console.error("⚠️ Failed to read last_report_date.txt:", e);
-}
 
 // Load environment variables with fallback paths
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -478,7 +261,6 @@ const ACCOUNTS = BOT_ACCOUNT
     : ALL_ACCOUNTS;
 let currentAccountIndex = 0;
 let consecutiveAuthFailures = 0;
-let sessionAlertSent = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-ACCOUNT TEMPLATES + POSTING RULES
@@ -2632,9 +2414,6 @@ async function runBot(account: FbAccount): Promise<boolean> {
     console.log(`Mode: ${DRY_RUN ? '🧪 DRY RUN (no actual posts)' : '🔴 LIVE MODE'}`);
     console.log(`Scan Interval: ${SCAN_INTERVAL / 1000}s`);
 
-    // Check daily 6 PM report trigger on every cycle
-    await checkAndSendDailyReport();
-    
     const fbEmail = account.email;
     const fbPassword = account.password;
     console.log(`👤 Account: ${fbEmail}`);
@@ -2949,26 +2728,8 @@ async function runBot(account: FbAccount): Promise<boolean> {
             recordLoginResult(fbEmail, false, failureReason);
             await writeHeartbeat();
 
-            // Send JUST ONE email alert per failure incident until session is restored
-            if (!sessionAlertSent) {
-                sessionAlertSent = true;
-                await sendAlertEmail(
-                    `🚨 Fiesta Fresh Bot Alert: Facebook Session Disconnected (${fbEmail})`,
-                    `The Facebook bot could not connect using saved cookies for account: ${fbEmail}\n\n` +
-                    `Reason: ${failureReason}\n` +
-                    `${proofUrl ? `Proof Screenshot: ${proofUrl}\n` : ''}\n` +
-                    `Action Required: Run \`npx tsx prime-session.ts\` or \`npx tsx refresh-session.ts\` to log in and refresh session cookies.\n\n` +
-                    `(Note: This is a single email alert. You will not receive repeated spam emails until the session is restored.)`
-                );
-            }
-
             await context.close();
             return false;
-        }
-
-        if (sessionAlertSent) {
-            console.log("✅ Facebook session restored! Resetting email alert throttle.");
-            sessionAlertSent = false;
         }
 
         console.log("👤 Login verified. Starting execution...");
@@ -3279,14 +3040,6 @@ async function main() {
             if (!success) {
                 console.error("❌ All configured Facebook accounts failed to authenticate in this cycle.");
                 consecutiveAuthFailures++;
-                if (consecutiveAuthFailures === 3 || consecutiveAuthFailures % 24 === 0) {
-                    await sendAlertEmail(
-                        'Fiesta bot: all Facebook logins failing',
-                        `Every configured account failed to authenticate for ${consecutiveAuthFailures} cycles in a row.\n\n` +
-                        `Login state: ${JSON.stringify(loginState, null, 2)}\n\n` +
-                        `The sessions need re-priming (bot/prime_session_mac.py) before any comment can be posted.`
-                    );
-                }
             } else {
                 consecutiveAuthFailures = 0;
             }
@@ -3304,12 +3057,6 @@ async function main() {
     await writeHeartbeat({ event: 'boot' });
     // Independent heartbeat so the dashboard sees liveness mid-cycle too
     setInterval(() => { writeHeartbeat({ last_cycle: lastCycleTime }); }, 60000);
-
-    // The 6 PM report used to be triggered from INSIDE runBot(), so it only went
-    // out if a Facebook login had just succeeded. Whenever the sessions were
-    // down — exactly when you most need to be told — no report was sent at all.
-    // It now runs on its own timer, independent of Facebook entirely.
-    setInterval(() => { checkAndSendDailyReport().catch(() => {}); }, 5 * 60 * 1000);
 
     // ─────────────────────────────────────────────────────────────────────────
     // SCHEDULER
