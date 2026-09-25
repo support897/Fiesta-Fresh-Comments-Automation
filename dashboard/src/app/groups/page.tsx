@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase, isConfigured } from "@/lib/supabaseClient";
 import { Compass, Plus, Trash2, ExternalLink, Power, RefreshCw, FileText } from "lucide-react";
-import targetGroupsData from "@/data/target_groups.json";
 
 type GroupItem = {
   id: string;
@@ -42,14 +41,9 @@ export default function FacebookGroupsManager() {
       console.error("Error fetching groups from Supabase:", e);
     }
 
-    // Fallback to Google Doc extracted 85 groups
-    const fallbackList: GroupItem[] = targetGroupsData.map((url, idx) => ({
-      id: `doc_${idx + 1}`,
-      url: url,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    }));
-    setGroups(fallbackList);
+    // No fake fallback: if Supabase has no groups, show empty.
+    // Never invent is_active=true or created_at timestamps.
+    setGroups([]);
     setLoading(false);
   };
 

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Camera,
   Calendar,
   Compass,
   FileText,
@@ -66,7 +65,6 @@ const operationsNav = [
   { name: "Post Queue",     href: "/queue",       icon: ClipboardList   },
   { name: "Booster",        href: "/booster",     icon: Rocket          },
   { name: "Commented",      href: "/commented",   icon: CheckCheck      },
-  { name: "Proof Gallery",  href: "/proof",       icon: Camera          },
   { name: "Schedule Manager", href: "/schedule",  icon: Calendar        },
 ];
 
