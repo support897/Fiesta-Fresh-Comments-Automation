@@ -2679,6 +2679,16 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 // looked for the fields — the re-login "failed" without ever seeing
                 // a form. Retry the navigation, then wait for the form itself.
                 await gotoWithRetry(page, 'https://www.facebook.com/login', 'login page', 3);
+                // Facebook sometimes shows a profile-selector ("Use another profile")
+                // instead of the email/password form. Click through to reveal the form.
+                try {
+                    const useAnother = page.locator('button:has-text("Use another profile"), div[role="button"]:has-text("Use another profile")').first();
+                    if (await useAnother.isVisible({ timeout: 5000 }).catch(() => false)) {
+                        console.log('👤 Clicking "Use another profile" to reveal login form...');
+                        await useAnother.click();
+                        await randomDelay(2000, 3000);
+                    }
+                } catch (e) { /* no profile selector, continue */ }
                 await page.locator('input[name="email"], #email').first()
                     .waitFor({ state: 'visible', timeout: 25000 })
                     .catch(() => { /* logged below with the real page state */ });
@@ -3321,6 +3331,15 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
   try {
     await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 30000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 2500));
+    // Profile-selector ("Use another profile") instead of the form — click through.
+    try {
+      const useAnother = page.locator('button:has-text("Use another profile"), div[role="button"]:has-text("Use another profile")').first();
+      if (await useAnother.isVisible({ timeout: 5000 }).catch(() => false)) {
+        console.log('🔑 Auto-relogin: clicking "Use another profile"...');
+        await useAnother.click();
+        await new Promise(r => setTimeout(r, 2500));
+      }
+    } catch (e) { /* no profile selector */ }
     const emailBox = page.locator('#email, [name="email"]').first();
     const passBox = page.locator('#pass, [name="pass"]').first();
     if (!(await emailBox.isVisible({ timeout: 8000 }).catch(() => false))) {
