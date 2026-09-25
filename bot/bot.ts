@@ -227,7 +227,7 @@ const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '1800') * 10
 // (the equivalent of clicking "posted" in the dashboard).
 const POSTER_MODE = process.env.POSTER_MODE === 'true';
 const POSTER_DRAFTS_PER_CYCLE = parseInt(process.env.POSTER_DRAFTS_PER_CYCLE || '5');
-const POSTER_MAX_DRAFT_AGE_HOURS = parseInt(process.env.POSTER_MAX_DRAFT_AGE_HOURS || '48');
+const POSTER_MAX_DRAFT_AGE_HOURS = parseInt(process.env.POSTER_MAX_DRAFT_AGE_HOURS || '24');
 const POSTER_URL_TEXT = 'https://www.fiestafreshcleaning.com/';
 
 // --- Account Configuration ---
@@ -3288,6 +3288,16 @@ async function posterLogReply(postId: string, groupUrl: string, commentUrl: stri
 
 async function runPosterCycle(): Promise<void> {
     console.log('📮 Poster cycle: checking comment_queue for drafts_ready acc2 drafts...');
+    // Honor the global pause switch (config.bot_status=false) — same as legacy runBot().
+    try {
+        const { data: config } = await supabase.from('config').select('bot_status').maybeSingle();
+        if (config && config.bot_status === false) {
+            console.log('⏸️ Poster: bot is paused in Supabase config. Waiting...');
+            return;
+        }
+    } catch (e: any) {
+        console.log(`⚠️ Poster: config check failed, falling back to active (${e.message})`);
+    }
     if (posterQuietHours()) {
         console.log('🌙 Poster: quiet hours (23:00–05:00 Brisbane) — sleeping this cycle.');
         return;

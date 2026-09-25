@@ -1,6 +1,6 @@
 # Deployment — Fiesta Fresh Comments Bot
 
-The bot runs **only** on the Oracle VPS (`159.13.36.205`) as a systemd service.
+The bot runs **only** on the Oracle VPS (`161.33.225.13 (ephemeral - was 159.13.36.205 on 2026-09-24)`) as a systemd service.
 The dashboard runs **only** on Vercel (`fiesta-comments-dashboard.vercel.app`),
 auto-deployed from `main`. They share state through Supabase — there is no direct
 API between them.
