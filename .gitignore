@@ -22,3 +22,6 @@ vps_details.txt
 bot/.pwattempt_*
 bot/.search_cursor
 bot/profiles/
+
+__pycache__/
+*.pyc
