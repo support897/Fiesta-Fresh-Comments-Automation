@@ -656,15 +656,56 @@ const SERVICE_LINES: Array<{ line: string; words: string[] }> = [
 
 const SERVICE_KEYWORDS: string[] = SERVICE_LINES.flatMap(s => s.words);
 
+/**
+ * Which service lines are currently enabled in Supabase (service_types table,
+ * toggled from the dashboard Service Types page). Refreshed each scan cycle.
+ * Maps DB keys -> classifier line names. Empty set = not loaded yet (allow all).
+ */
+let ACTIVE_SERVICE_LINES: Set<string> = new Set();
+let serviceLinesLoaded = false;
+const DB_KEY_TO_LINE: Record<string, string> = {
+    bond: 'BOND',
+    carpet: 'CARPET',
+    builders: 'COMMERCIAL',
+    commercial: 'COMMERCIAL',
+    home: 'HOME',
+};
+
+async function refreshActiveServiceLines(): Promise<void> {
+    try {
+        const { data, error } = await supabase.from('service_types').select('key, is_active');
+        if (error) throw error;
+        const next = new Set<string>();
+        for (const row of data || []) {
+            if (row.is_active !== false) {
+                const line = DB_KEY_TO_LINE[row.key];
+                if (line) next.add(line);
+            }
+        }
+        ACTIVE_SERVICE_LINES = next;
+        serviceLinesLoaded = true;
+        console.log(`🏷️ Active service lines: ${[...next].join(', ') || '(none)'}`);
+    } catch (e: any) {
+        console.log(`⚠️ Could not load service_types, keeping previous: ${e?.message || e}`);
+    }
+}
+
+/** True when the classifier line is enabled (or types haven't loaded yet). */
+function isServiceLineActive(line: string): boolean {
+    if (!serviceLinesLoaded) return true;
+    return ACTIVE_SERVICE_LINES.has(line);
+}
+
 const GENERIC_SERVICE_WORDS = new Set([
     'cleaner', 'cleaners', 'cleaning', 'cleaning service', 'cleaning services',
     'cleaning company', 'cleaning lady',
 ]);
 SERVICE_SPECIFIC.push(...SERVICE_KEYWORDS.filter(w => !GENERIC_SERVICE_WORDS.has(w)));
 
-/** Which service line a post belongs to (most specific first). */
+/** Which service line a post belongs to (most specific first). Skips lines disabled in Supabase. */
 function detectServiceLine(text: string): { line: string; word: string } | null {
     for (const { line, words } of SERVICE_LINES) {
+        if (!isServiceLineActive(line)) continue;
         const w = firstMatch(text, words);
         if (w) return { line, word: w };
     }
@@ -3024,6 +3065,8 @@ async function main() {
         cycleStartedAt = Date.now();
         newLeadsThisCycle = 0;
         try {
+            // Refresh which cleaning types are enabled (dashboard Service Types page).
+            await refreshActiveServiceLines();
             if (POSTER_MODE) {
                 console.log("📮 POSTER_MODE active — running queue poster (no patrol/discovery).");
                 await runPosterCycle();
