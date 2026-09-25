@@ -62,6 +62,7 @@ export default function DashboardPage() {
   const [postedToday, setPostedToday] = useState(0);
   const [staleSoon, setStaleSoon] = useState<QueueRow[]>([]);
   const [trend, setTrend] = useState<{ day: string; drafts: number; posted: number }[]>([]);
+  const [alerts, setAlerts] = useState<{ id: string; message: string; created_at: string }[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -71,6 +72,15 @@ export default function DashboardPage() {
         setIsActive(!!config.bot_status);
         setConfigId(config.id);
       }
+
+      // Session-death alerts (unacknowledged) — one per incident, never repeated
+      const { data: alertRows } = await supabase
+        .from("alerts")
+        .select("id, message, created_at")
+        .is("acknowledged_at", null)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      setAlerts((alertRows ?? []) as { id: string; message: string; created_at: string }[]);
 
       // Queue rows from the last 7 days — one query drives tiles, attention, trend
       const weekAgo = new Date(Date.now() - 7 * 86400 * 1000).toISOString();
@@ -174,7 +184,12 @@ export default function DashboardPage() {
   };
 
   const healthyCount = accounts.filter((a) => a.ok === true).length;
-  const attentionCount = staleSoon.length + accounts.filter((a) => a.ok === false).length;
+  const attentionCount = staleSoon.length + accounts.filter((a) => a.ok === false).length + alerts.length;
+
+  const dismissAlert = async (id: string) => {
+    await supabase.from("alerts").update({ acknowledged_at: new Date().toISOString() }).eq("id", id);
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  };
   const maxTrend = Math.max(1, ...trend.map((t) => Math.max(t.drafts, t.posted)));
 
   if (loading) {
@@ -309,6 +324,27 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500 py-2">All clear — nothing needs you right now. 🎉</p>
         ) : (
           <div className="space-y-2">
+            {alerts.map((al) => (
+              <div
+                key={al.id}
+                className="flex items-center gap-3 p-3 bg-red-50 border border-red-200 rounded-xl"
+              >
+                <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-red-800">Login keeps failing</p>
+                  <p className="text-[11px] text-red-600">{al.message}</p>
+                  <p className="text-[10px] text-red-400 mt-0.5">{agoLabel(al.created_at)} · sent once, won't repeat</p>
+                </div>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <Link href="/cookies" className="text-[11px] font-bold text-white bg-red-600 hover:bg-red-700 px-3 py-1.5 rounded-lg text-center">
+                    Fix
+                  </Link>
+                  <button onClick={() => dismissAlert(al.id)} className="text-[11px] font-bold text-red-600 px-3 py-1">
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
             {accounts.filter((a) => a.ok === false).map((a) => (
               <Link
                 key={a.key}

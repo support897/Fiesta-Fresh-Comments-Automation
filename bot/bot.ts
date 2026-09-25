@@ -3225,6 +3225,107 @@ async function posterVerifyLogin(page: any, context: any): Promise<boolean> {
     return hasCUser && !loginFormVisible && !checkpoint;
 }
 
+// ── SESSION RECOVERY ─────────────────────────────────────────────────────
+// Auto re-login with password + TOTP when cookies die. Alerts the user ONCE
+// per day per account after 10 failed attempts (never repeats).
+// Secrets live ONLY in the VPS /opt/fiesta/bot/.env — never in git:
+//   ACC2_EMAIL / ACC2_PASSWORD / ACC2_TOTP_SEED
+//   ACC3_EMAIL / ACC3_PASSWORD / ACC3_TOTP_SEED
+
+const LOGIN_FAIL_ALERT_THRESHOLD = 10;
+
+async function recordLoginAttempt(accountKey: string, success: boolean, method: string): Promise<void> {
+  try {
+    await supabase.from('login_attempts').insert({ account_key: accountKey, success, method });
+    if (success) return;
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const { count } = await supabase.from('login_attempts')
+      .select('id', { count: 'exact', head: true })
+      .eq('account_key', accountKey).eq('success', false)
+      .gte('attempted_at', dayStart.toISOString());
+    if ((count ?? 0) >= LOGIN_FAIL_ALERT_THRESHOLD) {
+      const day = new Date().toISOString().split('T')[0];
+      const label = accountKey === 'account2' ? 'Account 2 (Projects Reports)' : 'Account 3 (Website Booster)';
+      // dedupe_key: one alert per account per day, silently ignored if already sent.
+      await supabase.from('alerts').upsert({
+        type: 'session_dead', account_key: accountKey,
+        message: `${label} login failed ${count} times today. Auto-recovery could not log back in — please re-prime the session in Cookie Manager.`,
+        dedupe_key: `session_dead:${accountKey}:${day}`,
+      }, { onConflict: 'dedupe_key' });
+      console.warn(`🚨 Alert recorded: ${label} failed ${count}x today (one alert per day).`);
+    }
+  } catch (e: any) {
+    console.warn('⚠️ recordLoginAttempt failed:', e.message);
+  }
+}
+
+async function attemptAutoRelogin(page: any, context: any, accountKey: string, sessionKey: string): Promise<boolean> {
+  const prefix = accountKey === 'account2' ? 'ACC2' : 'ACC3';
+  const email = process.env[`${prefix}_EMAIL`];
+  const password = process.env[`${prefix}_PASSWORD`];
+  const totpSeed = process.env[`${prefix}_TOTP_SEED`];
+  if (!email || !password) {
+    console.log(`ℹ️ Auto-relogin: ${prefix}_EMAIL/${prefix}_PASSWORD not set in .env — skipping.`);
+    return false;
+  }
+  console.log(`🔑 Auto-relogin: attempting fresh login for ${accountKey}...`);
+  try {
+    await page.goto('https://www.facebook.com/login', { waitUntil: 'commit', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 2500));
+    const emailBox = page.locator('#email, [name="email"]').first();
+    const passBox = page.locator('#pass, [name="pass"]').first();
+    if (!(await emailBox.isVisible({ timeout: 8000 }).catch(() => false))) {
+      console.warn('🔑 Auto-relogin: login form not found.');
+      return false;
+    }
+    await emailBox.fill(email);
+    await passBox.fill(password);
+    await page.locator('[name="login"], #loginbutton').first().click({ timeout: 5000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 5000));
+
+    // 2FA checkpoint: enter TOTP code if we have the seed.
+    const codeBox = page.locator('[name="approvals_code"], #approvals_code').first();
+    if (await codeBox.isVisible({ timeout: 8000 }).catch(() => false)) {
+      if (!totpSeed) {
+        console.warn('🔑 Auto-relogin: 2FA required but no TOTP seed in .env.');
+        return false;
+      }
+      const { TOTP } = await import('otpauth');
+      const totp = new TOTP({ secret: totpSeed.replace(/\s/g, '') });
+      const code = totp.generate();
+      await codeBox.fill(code);
+      await page.locator('[name="submit[Submit]"], #checkpointSubmitButton').first().click({ timeout: 5000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    const ok = await posterVerifyLogin(page, context);
+    if (ok) {
+      const cookies = await context.cookies().catch(() => []);
+      await supabase.from('sessions').upsert({ user_email: sessionKey, cookies, updated_at: new Date() });
+      console.log(`✅ Auto-relogin: ${accountKey} logged in, fresh cookies saved.`);
+    } else {
+      console.warn(`🔑 Auto-relogin: ${accountKey} login not verified after attempt.`);
+    }
+    return ok;
+  } catch (e: any) {
+    console.warn(`🔑 Auto-relogin error for ${accountKey}:`, e.message);
+    return false;
+  }
+}
+
+/** Verify session; if dead, try auto-relogin once. Records the attempt. */
+async function ensurePosterSession(page: any, context: any, accountKey: string, sessionKey: string, localFallbackFile?: string): Promise<boolean> {
+  const restored = await posterRestoreSession(context, sessionKey, localFallbackFile);
+  if (restored && await posterVerifyLogin(page, context)) {
+    await recordLoginAttempt(accountKey, true, 'verify');
+    return true;
+  }
+  console.warn(`⚠️ Poster: ${accountKey} session dead — trying auto-relogin...`);
+  const relogged = await attemptAutoRelogin(page, context, accountKey, sessionKey);
+  await recordLoginAttempt(accountKey, relogged, 'auto_relogin');
+  return relogged;
+}
+
 /** Type the EXACT text and post it on the given post URL. Verifies it landed. */
 async function posterPostExact(page: any, postUrl: string, text: string, label: string): Promise<{ ok: boolean; commentUrl: string }> {
     await page.goto(postUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
@@ -3347,11 +3448,8 @@ async function runPosterCycle(): Promise<void> {
         const b3 = await posterLaunchBrowser();
         try {
             const page = b3.context.pages().length > 0 ? b3.context.pages()[0] : await b3.context.newPage();
-            const restored = await posterRestoreSession(b3.context, 'account3', path.join(__dirname, 'account3_cookies.json'));
-            if (!restored) {
-                console.warn('⚠️ Poster: no Account 3 session found — prime Account 3 cookies.');
-            } else if (!(await posterVerifyLogin(page, b3.context))) {
-                console.warn('⚠️ Poster: Account 3 login NOT verified — cookies may be dead. Re-prime Account 3.');
+            if (!(await ensurePosterSession(page, b3.context, 'account3', 'account3', path.join(__dirname, 'account3_cookies.json')))) {
+                console.warn('⚠️ Poster: Account 3 session unavailable (auto-relogin failed or not configured). Draft stays queued.');
             } else {
                 const res = await posterPostExact(page, draft.permalink, POSTER_URL_TEXT, 'acc3');
                 if (res.ok) {
@@ -3382,11 +3480,8 @@ async function runPosterCycle(): Promise<void> {
         const b2 = await posterLaunchBrowser();
         try {
             const page = b2.context.pages().length > 0 ? b2.context.pages()[0] : await b2.context.newPage();
-            const restored = await posterRestoreSession(b2.context, acc2Email);
-            if (!restored) {
-                console.warn(`⚠️ Poster: no ${acc2Email} session found — re-prime this account's cookies.`);
-            } else if (!(await posterVerifyLogin(page, b2.context))) {
-                console.warn(`⚠️ Poster: ${acc2Email} login NOT verified — cookies may be dead. Re-prime this account.`);
+            if (!(await ensurePosterSession(page, b2.context, 'account2', acc2Email))) {
+                console.warn(`⚠️ Poster: ${acc2Email} session unavailable (auto-relogin failed or not configured). Draft stays queued.`);
             } else {
                 const res = await posterPostExact(page, draft.permalink, draft.comment_text, 'acc2');
                 if (res.ok) {
