@@ -74,7 +74,7 @@ const managementNav = [
   { name: "Service Types",     href: "/service-types", icon: Tags      },
   { name: "Comment Templates", href: "/templates",     icon: FileText  },
   { name: "Facebook Groups",   href: "/groups",        icon: Compass   },
-  { name: "Cookies 🍪",        href: "/cookies",       icon: Cookie    },
+  { name: "Cookies",           href: "/cookies",       icon: Cookie    },
 ];
 
 function NavSection({ title, items, pathname, onNavigate }: {
@@ -129,7 +129,7 @@ function SidebarBody({ pathname, onNavigate }: { pathname: string | null; onNavi
       {/* Nav */}
       <div className="flex-1 overflow-y-auto scrollbar-hide px-4 pb-6 space-y-8">
         <NavSection title="Operations Center" items={operationsNav} pathname={pathname} onNavigate={onNavigate} />
-        <NavSection title="FB Comments & Rules" items={managementNav} pathname={pathname} onNavigate={onNavigate} />
+        <NavSection title="Bot Settings" items={managementNav} pathname={pathname} onNavigate={onNavigate} />
       </div>
 
       {/* Footer */}

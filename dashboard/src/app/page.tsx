@@ -306,7 +306,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">Command Center</h1>
           <p className="text-sm font-medium text-slate-500 mt-1">
-            Human-reviewed draft flow — the patrol finds leads, you post every comment
+            Patrol finds leads, you review the drafts, the VPS posts them
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -323,7 +323,7 @@ export default function DashboardPage() {
             className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3.5 rounded-2xl font-bold flex items-center gap-2.5 transition-all duration-300 shadow-lg shadow-emerald-500/20 hover:scale-105 disabled:opacity-50 text-sm"
           >
             {isBotActive ? <Pause size={16} /> : <Play size={16} className="fill-current" />}
-            {triggering ? "UPDATING..." : isBotActive ? "PAUSE BOT" : "RUN BOT NOW"}
+            {triggering ? "UPDATING..." : isBotActive ? "PAUSE POSTING" : "RESUME POSTING"}
           </button>
         </div>
       </div>
@@ -332,7 +332,7 @@ export default function DashboardPage() {
       {!isBotActive && (
         <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3 text-red-700">
           <ShieldAlert className="w-5 h-5 shrink-0" />
-          <div className="text-xs font-semibold">Bot is paused. No new comments will be posted until you resume.</div>
+          <div className="text-xs font-semibold">Posting is paused. No new comments will be posted until you resume.</div>
         </div>
       )}
 
@@ -447,7 +447,7 @@ export default function DashboardPage() {
             ? "🔴 No heartbeat from the VPS — the bot is not scanning. Check the fiesta-bot service."
             : !isBotActive
               ? "⏸ VPS alive but bot is paused in config — no comments will be posted."
-              : `🟢 Scanning every ${Math.round((health.intervalSeconds ?? 1800) / 60)} min · ${health.cycles ?? 0} cycles · ${health.mode === "dry_run" ? "DRY RUN" : "live"}`}
+              : `🟢 Posting every ${Math.round((health.intervalSeconds ?? 1800) / 60)} min · ${health.cycles ?? 0} cycles · ${health.mode === "dry_run" ? "DRY RUN" : "live"}`}
         </div>
       </div>
 
@@ -476,7 +476,7 @@ export default function DashboardPage() {
               {replies.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-slate-400 italic">
-                    No comments posted yet — bot is actively scanning groups.
+                    No comments posted yet.
                   </td>
                 </tr>
               )}
