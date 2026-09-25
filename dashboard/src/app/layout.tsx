@@ -10,6 +10,12 @@ import {
   Compass,
   FileText,
   Cookie,
+  ClipboardList,
+  Rocket,
+  CheckCheck,
+  Tags,
+  Menu,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
@@ -57,98 +63,144 @@ const LOGO = "https://www.fiestafreshcleaning.com/assets/logo-CpH5fHWq.jpeg";
 
 const operationsNav = [
   { name: "Command Center", href: "/",            icon: LayoutDashboard },
+  { name: "Post Queue",     href: "/queue",       icon: ClipboardList   },
+  { name: "Booster",        href: "/booster",     icon: Rocket          },
+  { name: "Commented",      href: "/commented",   icon: CheckCheck      },
   { name: "Proof Gallery",  href: "/proof",       icon: Camera          },
   { name: "Schedule Manager", href: "/schedule",  icon: Calendar        },
 ];
 
 const managementNav = [
-  { name: "Comment Templates", href: "/templates",     icon: FileText    },
-  { name: "Facebook Groups",  href: "/groups",        icon: Compass     },
-  { name: "Cookies 🍪",       href: "/cookies",       icon: Cookie      },
+  { name: "Service Types",     href: "/service-types", icon: Tags      },
+  { name: "Comment Templates", href: "/templates",     icon: FileText  },
+  { name: "Facebook Groups",   href: "/groups",        icon: Compass   },
+  { name: "Cookies 🍪",        href: "/cookies",       icon: Cookie    },
 ];
+
+function NavSection({ title, items, pathname, onNavigate }: {
+  title: string;
+  items: typeof operationsNav;
+  pathname: string | null;
+  onNavigate?: () => void;
+}) {
+  return (
+    <div>
+      <h2 className="section-label mb-3">{title}</h2>
+      <nav className="space-y-1">
+        {items.map((item) => {
+          const active = pathname === item.href;
+          return (
+            <Link key={item.name} href={item.href} onClick={onNavigate}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-300 group text-sm font-medium",
+                active ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+              )}
+            >
+              <item.icon className={cn("w-4 h-4 transition-colors", active ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600")} />
+              <span>{item.name}</span>
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
+function SidebarBody({ pathname, onNavigate }: { pathname: string | null; onNavigate?: () => void }) {
+  return (
+    <>
+      {/* Brand */}
+      <div className="p-6 pb-2">
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-3">
+            <img
+              src={LOGO}
+              alt="Logo"
+              className="w-9 h-9 rounded-xl object-contain shadow-sm border border-slate-100"
+            />
+            <div>
+              <h1 className="text-sm font-bold tracking-tight text-slate-800 leading-tight">Fiesta Fresh</h1>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500">Cleaning Services</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <div className="flex-1 overflow-y-auto scrollbar-hide px-4 pb-6 space-y-8">
+        <NavSection title="Operations Center" items={operationsNav} pathname={pathname} onNavigate={onNavigate} />
+        <NavSection title="FB Comments & Rules" items={managementNav} pathname={pathname} onNavigate={onNavigate} />
+      </div>
+
+      {/* Footer */}
+      <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
+        <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
+          <span>Version 1.4.0</span>
+          <VpsBadge />
+        </div>
+      </div>
+    </>
+  );
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isActive = (href: string) => pathname === href;
+  const [menuOpen, setMenuOpen] = React.useState(false);
+
+  React.useEffect(() => { setMenuOpen(false); }, [pathname]);
 
   return (
     <html lang="en">
       <head>
         <title>Fiesta Fresh · Comments Bot</title>
         <meta name="description" content="Fiesta Fresh Cleaning – Comments Automation Dashboard" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* PWA — installable from Safari / Chrome home screen */}
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#1d4ed8" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="Fiesta Queue" />
+        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
       </head>
       <body className="flex overflow-hidden bg-slate-50 font-sans">
-        <aside className="w-64 h-screen flex flex-col bg-white border-r border-slate-200">
-          {/* Brand */}
-          <div className="p-6 pb-2">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
-                <img
-                  src={LOGO}
-                  alt="Logo"
-                  className="w-9 h-9 rounded-xl object-contain shadow-sm border border-slate-100"
-                />
-                <div>
-                  <h1 className="text-sm font-bold tracking-tight text-slate-800 leading-tight">Fiesta Fresh</h1>
-                  <p className="text-[10px] uppercase tracking-widest text-slate-500">Cleaning Services</p>
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* Mobile top bar */}
+        <header className="md:hidden fixed top-0 inset-x-0 z-30 h-14 bg-white border-b border-slate-200 flex items-center gap-3 px-4">
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open menu"
+            className="p-2 -ml-2 rounded-lg text-slate-600 hover:bg-slate-100"
+          >
+            <Menu size={22} />
+          </button>
+          <img src={LOGO} alt="Fiesta Fresh" className="w-8 h-8 rounded-lg object-contain border border-slate-100" />
+          <span className="text-sm font-bold text-slate-800">Fiesta Fresh</span>
+        </header>
 
-          {/* Nav */}
-          <div className="flex-1 overflow-y-auto scrollbar-hide px-4 pb-6 space-y-8">
-            <div>
-              <h2 className="section-label mb-3">Operations Center</h2>
-              <nav className="space-y-1">
-                {operationsNav.map((item) => {
-                  const active = isActive(item.href);
-                  return (
-                    <Link key={item.name} href={item.href}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-300 group text-sm font-medium",
-                        active ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
-                      )}
-                    >
-                      <item.icon className={cn("w-4 h-4 transition-colors", active ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600")} />
-                      <span>{item.name}</span>
-                    </Link>
-                  );
-                })}
-              </nav>
-            </div>
-
-            <div>
-              <h2 className="section-label mb-3">FB Comments &amp; Rules</h2>
-              <nav className="space-y-1">
-                {managementNav.map((item) => {
-                  const active = isActive(item.href);
-                  return (
-                    <Link key={item.name} href={item.href}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-300 group text-sm font-medium",
-                        active ? "bg-blue-50 text-blue-600" : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
-                      )}
-                    >
-                      <item.icon className={cn("w-4 h-4 transition-colors", active ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600")} />
-                      <span>{item.name}</span>
-                    </Link>
-                  );
-                })}
-              </nav>
-            </div>
+        {/* Mobile drawer */}
+        {menuOpen && (
+          <div className="md:hidden fixed inset-0 z-40">
+            <div className="absolute inset-0 bg-slate-900/40" onClick={() => setMenuOpen(false)} />
+            <aside className="absolute left-0 top-0 bottom-0 w-72 bg-white flex flex-col shadow-2xl animate-in slide-in-from-left duration-200">
+              <button
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close menu"
+                className="absolute top-4 right-4 p-2 rounded-lg text-slate-500 hover:bg-slate-100"
+              >
+                <X size={20} />
+              </button>
+              <SidebarBody pathname={pathname} onNavigate={() => setMenuOpen(false)} />
+            </aside>
           </div>
+        )}
 
-          {/* Footer */}
-          <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
-            <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium uppercase tracking-widest px-2">
-              <span>Version 1.3.0</span>
-              <VpsBadge />
-            </div>
-          </div>
+        {/* Desktop sidebar */}
+        <aside className="hidden md:flex w-64 h-screen flex-col bg-white border-r border-slate-200 shrink-0">
+          <SidebarBody pathname={pathname} />
         </aside>
 
-        <main className="flex-1 overflow-y-auto h-screen scrollbar-hide">
+        <main className="flex-1 overflow-y-auto h-screen scrollbar-hide pt-14 md:pt-0">
           <div className="max-w-7xl mx-auto p-4 md:p-8">
             {children}
           </div>

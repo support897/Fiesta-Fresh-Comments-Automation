@@ -19,6 +19,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
+import FunnelSection from "./FunnelSection";
 
 /* ─────────────────────── types ── */
 type ReplyLog = {
@@ -305,7 +306,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">Command Center</h1>
           <p className="text-sm font-medium text-slate-500 mt-1">
-            Real-time lead detection &amp; 3-account comment engine · VPS synced
+            Human-reviewed draft flow — the patrol finds leads, you post every comment
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -379,6 +380,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Draft funnel — the live human-reviewed pipeline */}
+      <FunnelSection />
 
       {/* Cookie Status */}
       <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
