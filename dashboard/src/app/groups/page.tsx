@@ -120,7 +120,7 @@ export default function FacebookGroupsManager() {
             </span>
           </div>
           <p className="text-xs font-medium text-slate-500">
-            Target Facebook groups patrolled continuously by the Azure VPS bot (Synced from Google Doc).
+            Facebook groups the patrol scans for cleaning leads every 3 hours.
           </p>
         </div>
 
@@ -182,7 +182,7 @@ export default function FacebookGroupsManager() {
               {loading ? (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-slate-400 font-medium">
-                    Loading 85 target groups...
+                    Loading target groups...
                   </td>
                 </tr>
               ) : groups.length === 0 ? (
