@@ -218,6 +218,18 @@ const DRY_RUN = process.env.DRY_RUN === 'true';
 // 1800s = 30 minutes between each full 85-group patrol cycle (runs 24/7)
 const SCAN_INTERVAL = parseInt(process.env.SCAN_INTERVAL_SECONDS || '1800') * 1000;
 
+// ── Queue poster mode ────────────────────────────────────────────────────────
+// When POSTER_MODE=true the bot does NO patrol/discovery. Each cycle it reads
+// comment_queue drafts (written by the assistant-side patrol) and posts them:
+//   1. Account 3 posts the website URL comment FIRST
+//   2. Account 2 posts the exact draft comment text
+// A draft is marked 'posted' only after the comment is verified on the page
+// (the equivalent of clicking "posted" in the dashboard).
+const POSTER_MODE = process.env.POSTER_MODE === 'true';
+const POSTER_DRAFTS_PER_CYCLE = parseInt(process.env.POSTER_DRAFTS_PER_CYCLE || '5');
+const POSTER_MAX_DRAFT_AGE_HOURS = parseInt(process.env.POSTER_MAX_DRAFT_AGE_HOURS || '48');
+const POSTER_URL_TEXT = 'https://www.fiestafreshcleaning.com/';
+
 // --- Account Configuration ---
 // FB_ACCOUNTS = JSON array of {email, password} for multi-account rotation
 // Falls back to FB_EMAIL/FB_PASSWORD for backward compatibility
@@ -1549,6 +1561,7 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
                 ts: new Date().toISOString(),
                 host: process.env.HOSTNAME || 'vps',
                 mode: DRY_RUN ? 'dry_run' : 'live',
+            posterMode: POSTER_MODE,
                 cycles: cycleCount,
                 running: isRunning,
                 interval_seconds: SCAN_INTERVAL / 1000,
@@ -3011,6 +3024,11 @@ async function main() {
         cycleStartedAt = Date.now();
         newLeadsThisCycle = 0;
         try {
+            if (POSTER_MODE) {
+                console.log("📮 POSTER_MODE active — running queue poster (no patrol/discovery).");
+                await runPosterCycle();
+                return;
+            }
             if (ACCOUNTS.length === 0) {
                 console.error("❌ No Facebook accounts configured.");
                 return;
@@ -3115,6 +3133,274 @@ async function main() {
         const m = process.memoryUsage();
         console.log(`📊 RSS ${(m.rss / 1048576).toFixed(0)}MB | heap ${(m.heapUsed / 1048576).toFixed(0)}MB | heapTotal ${(m.heapTotal / 1048576).toFixed(0)}MB | external ${(m.external / 1048576).toFixed(0)}MB`);
     }, 15000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QUEUE POSTER — POSTER_MODE implementation.
+// No discovery, no patrol, no auto-approvals. It only posts drafts that the
+// assistant-side patrol wrote to comment_queue, in this order per draft:
+//   1. Account 3 posts the website URL comment FIRST
+//   2. Account 2 posts the EXACT draft comment text
+// The queue row is marked 'posted' only after the comment is verified live on
+// the page — the same meaning as clicking "posted" in the dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function posterQuietHours(): boolean {
+    const h = parseInt(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
+    return h >= 23 || h < 5;
+}
+
+async function posterFetchDrafts(): Promise<any[]> {
+    const { data, error } = await supabase
+        .from('comment_queue')
+        .select('*')
+        .eq('account', 'acc2')
+        .eq('status', 'draft_ready')
+        .order('created_at', { ascending: true })
+        .limit(POSTER_DRAFTS_PER_CYCLE);
+    if (error) {
+        console.error('⚠️ Poster: failed to fetch drafts:', error.message);
+        return [];
+    }
+    return data || [];
+}
+
+async function posterLaunchBrowser() {
+    const proxy = resolveProxy();
+    const browser = await chromium.launch({
+        headless: process.env.HEADLESS !== 'false',
+        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+        ...(proxy ? { proxy } : {}),
+    });
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 900 },
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    });
+    await context.route('**/*', (route: any) => {
+        const t = route.request().resourceType();
+        if (['image', 'font', 'media'].includes(t)) return route.abort();
+        return route.continue();
+    });
+    return { browser, context };
+}
+
+async function posterRestoreSession(context: any, sessionKey: string, localFallbackFile?: string): Promise<boolean> {
+    let cookies: any = null;
+    try {
+        const { data } = await supabase.from('sessions').select('cookies')
+            .eq('user_email', sessionKey).order('updated_at', { ascending: false }).limit(1).maybeSingle();
+        cookies = data?.cookies;
+    } catch (e: any) {
+        console.warn(`⚠️ Poster: sessions lookup failed for ${sessionKey}: ${e.message}`);
+    }
+    if ((!cookies || !Array.isArray(cookies)) && localFallbackFile) {
+        try {
+            const fsMod = await import('fs');
+            if (fsMod.existsSync(localFallbackFile)) cookies = JSON.parse(fsMod.readFileSync(localFallbackFile, 'utf-8'));
+        } catch {}
+    }
+    if (!cookies || !Array.isArray(cookies) || cookies.length === 0) return false;
+    const sameSiteMap: Record<string, 'None' | 'Lax' | 'Strict'> = {
+        'no_restriction': 'None', 'none': 'None', 'lax': 'Lax', 'strict': 'Strict', 'unspecified': 'Lax',
+    };
+    const normalised = cookies.map((c: any) => ({ ...c, sameSite: sameSiteMap[(c.sameSite || '').toLowerCase()] ?? 'None' }));
+    try {
+        await context.addCookies(normalised);
+        return true;
+    } catch (e) {
+        console.warn(`⚠️ Poster: cookie restore failed for ${sessionKey}: ${e}`);
+        return false;
+    }
+}
+
+async function posterVerifyLogin(page: any, context: any): Promise<boolean> {
+    await gotoWithRetry(page, 'https://www.facebook.com', 'facebook.com', 3).catch(() => false);
+    await new Promise(r => setTimeout(r, 2500));
+    await closeOverlays(page).catch(() => {});
+    const liveCookies = await context.cookies().catch(() => [] as any[]);
+    const hasCUser = liveCookies.some((c: any) => c.name === 'c_user' && c.value);
+    const loginMarkers = page.locator('#email, [name="email"], #pass, [name="pass"]');
+    const loginFormVisible = await loginMarkers.first().isVisible().catch(() => false);
+    const checkpoint = await isSessionCheckpoint(page).catch(() => false);
+    return hasCUser && !loginFormVisible && !checkpoint;
+}
+
+/** Type the EXACT text and post it on the given post URL. Verifies it landed. */
+async function posterPostExact(page: any, postUrl: string, text: string, label: string): Promise<{ ok: boolean; commentUrl: string }> {
+    await page.goto(postUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
+    await new Promise(r => setTimeout(r, 3000));
+    await closeOverlays(page).catch(() => {});
+    const placeholder = page.locator(
+        '[aria-label*="Write a public comment" i], [aria-label*="Write a comment" i], ' +
+        '[aria-label*="Leave a comment" i], [aria-placeholder*="comment" i], ' +
+        '[data-lexical-editor], [contenteditable]').first();
+    const input = page.locator(
+        '[contenteditable="true"][aria-label*="comment" i], ' +
+        '[role="textbox"][aria-label*="comment" i], [contenteditable="true"]').first();
+    let ready = false;
+    for (let a = 1; a <= 9 && !ready; a++) {
+        await placeholder.click({ timeout: 2500 }).catch(() => {});
+        try { await input.waitFor({ state: 'visible', timeout: 5000 }); } catch {}
+        ready = await input.isVisible({ timeout: 1000 }).catch(() => false);
+        if (!ready) {
+            await page.mouse.wheel(0, 400).catch(() => {});
+            await new Promise(r => setTimeout(r, 1500));
+        }
+    }
+    if (!ready) {
+        console.warn(`⚠️ Poster [${label}]: comment box not found.`);
+        return { ok: false, commentUrl: '' };
+    }
+    await input.click({ force: true }).catch(() => {});
+    await typeComment(page, text);
+    await page.keyboard.press('Enter');
+    const proof = await captureCommentPermalink(page, postUrl, text.trim()).catch(() => ({ url: '', verified: false }));
+    return { ok: !!proof.verified, commentUrl: proof.url || '' };
+}
+
+async function posterMarkAcc3(draft: any) {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from('comment_queue').upsert({
+        post_id: draft.post_id, account: 'acc3', group_url: draft.group_url,
+        post_text: draft.post_text, service_type: draft.service_type,
+        comment_text: POSTER_URL_TEXT, permalink: draft.permalink,
+        status: 'posted', posted_at: now, updated_at: now,
+    }, { onConflict: 'post_id,account' });
+    if (error) console.warn('⚠️ Poster: acc3 queue upsert failed:', error.message);
+}
+
+async function posterMarkAcc2(draft: any) {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from('comment_queue')
+        .update({ status: 'posted', posted_at: now, updated_at: now })
+        .eq('post_id', draft.post_id).eq('account', 'acc2');
+    if (error) console.warn('⚠️ Poster: acc2 queue update failed:', error.message);
+}
+
+async function posterLogReply(postId: string, groupUrl: string, commentUrl: string, profileId: string) {
+    const { error } = await supabase.from('replies_log').insert({
+        post_id: postId, group_url: groupUrl,
+        comment_id: commentUrl || `poster_${Date.now()}`,
+        user_profile_id: profileId, replied_at: new Date().toISOString(),
+    });
+    if (error) console.warn('⚠️ Poster: replies_log insert failed:', error.message);
+}
+
+async function runPosterCycle(): Promise<void> {
+    console.log('📮 Poster cycle: checking comment_queue for drafts_ready acc2 drafts...');
+    if (posterQuietHours()) {
+        console.log('🌙 Poster: quiet hours (23:00–05:00 Brisbane) — sleeping this cycle.');
+        return;
+    }
+    if (DRY_RUN) {
+        console.log('🧪 Poster: DRY_RUN is on — drafts will be listed but nothing will be posted.');
+    }
+
+    const drafts = await posterFetchDrafts();
+    if (!drafts.length) {
+        console.log('📮 Poster: no draft_ready acc2 drafts waiting.');
+        return;
+    }
+    console.log(`📮 Poster: ${drafts.length} draft(s) waiting.`);
+
+    const acc2Rule = loadAccountRules().find(r => r.role === 'main_reply' && r.enabled);
+    const acc3Rule = loadAccountRules().find(r => r.role === 'url_drop' && r.enabled);
+    if (!acc2Rule) { console.warn('⚠️ Poster: no ENABLED main_reply account in accounts.config.json — enable Account 2 (Projects Reports).'); return; }
+    if (!acc3Rule) { console.warn('⚠️ Poster: no ENABLED url_drop account in accounts.config.json.'); return; }
+    const acc2Email = acc2Rule.email;
+
+    for (const draft of drafts) {
+        if (posterQuietHours()) { console.log('🌙 Poster: quiet hours reached — stopping.'); break; }
+
+        const ageH = (Date.now() - new Date(draft.created_at).getTime()) / 3600000;
+        if (ageH > POSTER_MAX_DRAFT_AGE_HOURS) {
+            await supabase.from('comment_queue')
+                .update({ status: 'skipped', updated_at: new Date().toISOString() })
+                .eq('post_id', draft.post_id).eq('account', 'acc2');
+            console.log(`⏭️ Poster: draft ${draft.post_id} is ${ageH.toFixed(0)}h old — marked skipped.`);
+            continue;
+        }
+
+        // Per-account throttles (daily caps + minimum gaps, counted from replies_log)
+        if (!(await accountMayComment('account3', 'account3'))) { console.log('⏸️ Poster: Account 3 throttled — retry next cycle.'); continue; }
+        if (!(await accountMayComment(acc2Email))) { console.log(`⏸️ Poster: ${acc2Email} throttled — retry next cycle.`); continue; }
+
+        console.log(`\n📮 Poster: draft ${draft.post_id} (${draft.service_type}) — Account 3 URL FIRST.`);
+
+        if (DRY_RUN) {
+            console.log(`[DRY RUN] Would post URL as Account 3, then draft as ${acc2Email}, on ${draft.permalink}`);
+            continue;
+        }
+
+        // ── Step 1: Account 3 posts the website URL ──
+        let acc3ok = false;
+        const b3 = await posterLaunchBrowser();
+        try {
+            const page = b3.context.pages().length > 0 ? b3.context.pages()[0] : await b3.context.newPage();
+            const restored = await posterRestoreSession(b3.context, 'account3', path.join(__dirname, 'account3_cookies.json'));
+            if (!restored) {
+                console.warn('⚠️ Poster: no Account 3 session found — prime Account 3 cookies.');
+            } else if (!(await posterVerifyLogin(page, b3.context))) {
+                console.warn('⚠️ Poster: Account 3 login NOT verified — cookies may be dead. Re-prime Account 3.');
+            } else {
+                const res = await posterPostExact(page, draft.permalink, POSTER_URL_TEXT, 'acc3');
+                if (res.ok) {
+                    acc3ok = true;
+                    await posterMarkAcc3(draft);
+                    await posterLogReply(draft.post_id, draft.permalink, res.commentUrl, 'account3');
+                    console.log(`✅ Poster: Account 3 URL posted on ${draft.post_id}.`);
+                } else {
+                    console.warn(`⚠️ Poster: Account 3 URL NOT confirmed on ${draft.post_id} — leaving queued.`);
+                }
+            }
+        } catch (e: any) {
+            console.error('⚠️ Poster Account 3 error:', e.message);
+        } finally {
+            await b3.context.close().catch(() => {});
+            await b3.browser.close().catch(() => {});
+        }
+
+        // Account 3 goes first — Account 2 waits until the URL has landed.
+        if (!acc3ok) {
+            console.warn(`⏭️ Poster: Account 3 did not post — Account 2 held back. Draft stays queued.`);
+            continue;
+        }
+
+        await new Promise(r => setTimeout(r, 60000 + Math.random() * 60000));
+
+        // ── Step 2: Account 2 posts the EXACT draft text ──
+        const b2 = await posterLaunchBrowser();
+        try {
+            const page = b2.context.pages().length > 0 ? b2.context.pages()[0] : await b2.context.newPage();
+            const restored = await posterRestoreSession(b2.context, acc2Email);
+            if (!restored) {
+                console.warn(`⚠️ Poster: no ${acc2Email} session found — re-prime this account's cookies.`);
+            } else if (!(await posterVerifyLogin(page, b2.context))) {
+                console.warn(`⚠️ Poster: ${acc2Email} login NOT verified — cookies may be dead. Re-prime this account.`);
+            } else {
+                const res = await posterPostExact(page, draft.permalink, draft.comment_text, 'acc2');
+                if (res.ok) {
+                    await posterMarkAcc2(draft);
+                    await posterLogReply(draft.post_id, draft.group_url, res.commentUrl, acc2Email);
+                    console.log(`✅ Poster: Account 2 comment posted on ${draft.post_id}.`);
+                } else {
+                    console.warn(`⚠️ Poster: Account 2 comment NOT confirmed on ${draft.post_id} — draft stays queued.`);
+                }
+            }
+        } catch (e: any) {
+            console.error('⚠️ Poster Account 2 error:', e.message);
+        } finally {
+            await b2.context.close().catch(() => {});
+            await b2.browser.close().catch(() => {});
+        }
+
+        const gapMin = parseInt(process.env.COMMENT_DELAY_MIN_SECONDS || '45');
+        const gapMax = parseInt(process.env.COMMENT_DELAY_MAX_SECONDS || '150');
+        const gap = (gapMin + Math.random() * Math.max(gapMax - gapMin, 1)) * 1000;
+        console.log(`⏳ Poster: resting ${Math.round(gap / 1000)}s before next draft...`);
+        await new Promise(r => setTimeout(r, gap));
+    }
+    console.log('📮 Poster cycle done.');
 }
 
 main();

@@ -41,7 +41,35 @@ sudo systemctl stop fiesta-bot
 sudo /opt/fiesta/scripts/deploy.sh
 ```
 
-## How a cycle works
+## Queue poster mode (current setup)
+
+The bot no longer patrols or discovers leads. Set in `/opt/fiesta/bot/.env`:
+
+```bash
+POSTER_MODE=true
+```
+
+Each cycle the bot reads `comment_queue` drafts (written by the assistant-side
+patrol, which runs on Muse's VM — never here) and posts them in this order:
+
+1. **Account 3 (Website Booster)** posts `https://www.fiestafreshcleaning.com/`
+   FIRST on the post.
+2. **Account 2 (Projects Reports)** posts the exact draft `comment_text`.
+
+A draft is marked `posted` in Supabase only after the comment is verified live
+on the page — the same meaning as clicking "posted" in the dashboard. If the
+Account 3 URL does not land, Account 2 is held back and the draft stays queued.
+Quiet hours 23:00–05:00 Australia/Brisbane are honoured, and the per-account
+daily caps / minimum gaps from `accounts.config.json` still apply.
+
+Tuning knobs (`.env`): `POSTER_DRAFTS_PER_CYCLE` (default 5),
+`POSTER_MAX_DRAFT_AGE_HOURS` (default 48 — older drafts are marked `skipped`).
+
+> Both Facebook sessions must be alive. If a login check fails, the poster
+> skips that account's posts and logs which account needs its cookies
+> re-primed — nothing is ever marked posted without on-page proof.
+
+## How a cycle works (legacy patrol mode, POSTER_MODE unset/false)
 
 1. Check `config.bot_status` (dashboard toggle) — pause honoured immediately.
 2. Restore Facebook cookies from `sessions` for the rotating account; on failure,
