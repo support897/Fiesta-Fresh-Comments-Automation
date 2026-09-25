@@ -74,7 +74,7 @@ const managementNav = [
   { name: "Service Types",     href: "/service-types", icon: Tags      },
   { name: "Comment Templates", href: "/templates",     icon: FileText  },
   { name: "Facebook Groups",   href: "/groups",        icon: Compass   },
-  { name: "Cookies",           href: "/cookies",       icon: Cookie    },
+  { name: "Cookie Manager",  href: "/cookies",       icon: Cookie    },
 ];
 
 function NavSection({ title, items, pathname, onNavigate }: {

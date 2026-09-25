@@ -193,7 +193,7 @@ export default function CookiesPage() {
             </div>
             <div>
               <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-                Cookie Manager 🍪
+                Cookie Manager
               </h1>
               <p className="text-sm text-slate-500 font-medium mt-0.5">
                 Run local script commands to prime session &amp; save cookies directly to Supabase / VPS

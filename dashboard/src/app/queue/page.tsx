@@ -79,10 +79,10 @@ export default function QueuePage() {
       <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight leading-none">
-            Account 2 · Ready to Post
+            Post Queue
           </h1>
           <p className="text-sm font-medium text-slate-500 mt-2 max-w-2xl">
-            Drafts the patrol prepared for the <b>Projects Reports</b> account.
+            Drafts the patrol prepared for <b>Account 2 (Projects Reports)</b>.
             Open the post on your computer, paste the comment, press Enter —
             then tap <b>“I’ve posted it”</b>. Nothing moves forward until you say so.
           </p>

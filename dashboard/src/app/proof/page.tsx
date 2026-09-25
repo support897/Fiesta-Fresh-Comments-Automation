@@ -69,7 +69,7 @@ export default function URLGallery() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              URL Gallery 🔗
+              Proof Gallery
             </h1>
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
               <Link2 className="w-3.5 h-3.5" /> Comment Links

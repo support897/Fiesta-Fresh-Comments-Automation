@@ -94,10 +94,10 @@ export default function BoosterPage() {
       <div className="flex justify-between items-center flex-wrap gap-4">
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight leading-none">
-            Account 3 · Booster
+            Booster
           </h1>
           <p className="text-sm font-medium text-slate-500 mt-2 max-w-2xl">
-            After the main comment is live, drop the website link as the second account.
+            After the main comment is live, <b>Account 3 (Website Booster)</b> drops the website link.
             Same rule: open the post, paste, Enter — then tap <b>“I’ve posted it”</b>.
           </p>
         </div>
