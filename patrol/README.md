@@ -54,6 +54,7 @@ so the generated file stays a faithful copy of the bot's lists.
 ## Files
 
 - `patrol.py` — the runner (supports `--dry-run`)
-- `weekly_report.py` — Wednesday 8am CEO email via Gmail
+- `weekly_report.py` — Wednesday 8am CEO email via Gmail SMTP app password
+  (`FIESTA_EMAIL_USER` / `FIESTA_EMAIL_APP_PASSWORD` in `~/.config/fiesta/env`)
 - `classifier.py` — approve/reject/unsure + service-type detection
 - `classifier_data.py` — keyword lists (generated, do not hand-edit)

@@ -6,13 +6,15 @@ comment funnel. Run hourly from cron — it sends at most once per ISO week,
 so a missed 8am (machine offline) is delivered on the next run after it
 comes back online.
 
-Requires Gmail to be connected (hatch_gws_cli gmail status).
+Sends via Gmail SMTP using an app password stored in the env file
+(FIESTA_EMAIL_USER / FIESTA_EMAIL_APP_PASSWORD) — no OAuth needed.
 """
 import json
 import os
-import subprocess
+import smtplib
 import sys
 from datetime import datetime
+from email.message import EmailMessage
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -128,9 +130,34 @@ def build_html(rows, week_start):
 </div>"""
 
 
+def send_email(subject, html, to):
+    """Send via Gmail SMTP with an app password. Returns True on success."""
+    user = os.environ.get('FIESTA_EMAIL_USER')
+    pw = os.environ.get('FIESTA_EMAIL_APP_PASSWORD')
+    if not user or not pw:
+        log('ERROR: FIESTA_EMAIL_USER / FIESTA_EMAIL_APP_PASSWORD not set.')
+        return False
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = f'Fiesta Fresh Automation <{user}>'
+    msg['To'] = to
+    msg.set_content('This report is best viewed as HTML email.')
+    msg.add_alternative(html, subtype='html')
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=60) as s:
+            s.starttls()
+            s.login(user, pw)
+            s.send_message(msg)
+    except Exception as e:
+        log(f'ERROR sending email: {type(e).__name__}: {e}')
+        return False
+    return True
+
+
 def main():
     load_env()
-    for var in ('SUPABASE_URL', 'SUPABASE_ANON_KEY', 'WEEKLY_REPORT_TO'):
+    for var in ('SUPABASE_URL', 'SUPABASE_ANON_KEY', 'WEEKLY_REPORT_TO',
+                'FIESTA_EMAIL_USER', 'FIESTA_EMAIL_APP_PASSWORD'):
         if not os.environ.get(var):
             log(f'ERROR: {var} not set.')
             return 2
@@ -151,13 +178,7 @@ def main():
     subject = f"Fiesta Fresh weekly comment report — week of {week_start.strftime('%d %b %Y')}"
     to = os.environ['WEEKLY_REPORT_TO']
 
-    try:
-        subprocess.run(
-            ['hatch_gws_cli', 'gmail', '+send', '--to', to,
-             '--subject', subject, '--html', '--body', html],
-            check=True, capture_output=True, text=True, timeout=120)
-    except subprocess.CalledProcessError as e:
-        log(f'ERROR sending (is Gmail connected?): {e.stderr.strip()[:200]}')
+    if not send_email(subject, html, to):
         return 1
 
     sent = json.loads(SENT_FILE.read_text()) if SENT_FILE.exists() else []
