@@ -2525,6 +2525,12 @@ async function runBot(account: FbAccount): Promise<boolean> {
         // Headless-shell: strip GPU/images for lightweight memory usage.
         contextOptions.args.push('--disable-gpu', '--blink-settings=imagesEnabled=false');
     }
+    // IGNORE_CERT_ERRORS=true: needed when running behind a TLS-intercepting
+    // egress proxy (e.g. Muse's VM). The proxy MITMs Chromium's TLS (curl is
+    // not intercepted). Only set this on networks you trust.
+    if (process.env.IGNORE_CERT_ERRORS === 'true') {
+        contextOptions.args.push('--ignore-certificate-errors');
+    }
     // Headed mode: no UA override, no image suppression — a normal Linux Chrome
     // (matching its real platform) is far less suspicious than a Mac UA on Linux.
 
