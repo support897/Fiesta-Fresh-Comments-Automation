@@ -2688,18 +2688,10 @@ async function runBot(account: FbAccount): Promise<boolean> {
                 // Facebook sometimes shows a profile-selector ("Use another profile")
                 // instead of the email/password form. Click through to reveal the form.
                 try {
-                    const clicked = await page.evaluate(() => {
-                        const els = Array.from(document.querySelectorAll('*'));
-                        const btn = els.find(e =>
-                            e.children.length === 0 &&
-                            e.textContent?.trim() === 'Use another profile' &&
-                            e.getBoundingClientRect().width > 50
-                        );
-                        if (btn) { (btn as HTMLElement).click(); return true; }
-                        return false;
-                    }).catch(() => false);
-                    if (clicked) {
-                        console.log('👤 Clicked "Use another profile" to reveal login form...');
+                    const useAnotherBtn = page.getByText('Use another profile', { exact: true }).first();
+                    if (await useAnotherBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+                        console.log('👤 Clicking "Use another profile" to reveal login form...');
+                        await useAnotherBtn.click({ timeout: 5000 });
                         await randomDelay(2000, 3000);
                     }
                 } catch (e) { /* no profile selector, continue */ }
@@ -3350,18 +3342,10 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
     await new Promise(r => setTimeout(r, 2500));
     // Profile-selector ("Use another profile") instead of the form — click through.
     try {
-      const clicked = await page.evaluate(() => {
-        const els = Array.from(document.querySelectorAll('*'));
-        const btn = els.find(e =>
-          e.children.length === 0 &&
-          e.textContent?.trim() === 'Use another profile' &&
-          e.getBoundingClientRect().width > 50
-        );
-        if (btn) { (btn as HTMLElement).click(); return true; }
-        return false;
-      }).catch(() => false);
-      if (clicked) {
-        console.log('🔑 Auto-relogin: clicked "Use another profile"...');
+      const useAnotherBtn = page.getByText('Use another profile', { exact: true }).first();
+      if (await useAnotherBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+        console.log('🔑 Auto-relogin: clicking "Use another profile"...');
+        await useAnotherBtn.click({ timeout: 5000 });
         await new Promise(r => setTimeout(r, 2500));
       }
     } catch (e) { /* no profile selector */ }
