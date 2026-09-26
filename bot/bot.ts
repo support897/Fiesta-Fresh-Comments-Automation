@@ -3362,9 +3362,7 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
 
     // 2FA checkpoint: enter TOTP code if we have the seed.
     const codeBox = page.locator('[name="approvals_code"], #approvals_code').first();
-    const codeBoxVisible = await codeBox.isVisible({ timeout: 8000 }).catch(() => false);
-    console.log(`🔍 DIAG: 2FA code box visible: ${codeBoxVisible}, URL: ${page.url().slice(0, 100)}`);
-    if (codeBoxVisible) {
+    if (await codeBox.isVisible({ timeout: 8000 }).catch(() => false)) {
       if (!totpSeed) {
         console.warn('🔑 Auto-relogin: 2FA required but no TOTP seed in .env.');
         return false;
@@ -3378,10 +3376,6 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
     }
 
     const ok = await posterVerifyLogin(page, context);
-    const pageTitle = await page.title().catch(() => '?');
-    const bodyText = await page.locator('body').innerText().catch(() => '').then((t: string) => t.slice(0, 300));
-    console.log(`🔍 DIAG: post-login URL: ${page.url().slice(0, 120)}, title: "${pageTitle}", verified: ${ok}`);
-    console.log(`🔍 DIAG: page text: ${bodyText.replace(/\n/g, ' | ').slice(0, 250)}`);
     if (ok) {
       const cookies = await context.cookies().catch(() => []);
       await supabase.from('sessions').upsert({ user_email: sessionKey, cookies, updated_at: new Date() });
