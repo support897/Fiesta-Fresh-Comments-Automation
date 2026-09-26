@@ -3379,7 +3379,7 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
 
     const ok = await posterVerifyLogin(page, context);
     const pageTitle = await page.title().catch(() => '?');
-    const bodyText = await page.locator('body').innerText().catch(() => '').then(t => t.slice(0, 300));
+    const bodyText = await page.locator('body').innerText().catch(() => '').then((t: string) => t.slice(0, 300));
     console.log(`🔍 DIAG: post-login URL: ${page.url().slice(0, 120)}, title: "${pageTitle}", verified: ${ok}`);
     console.log(`🔍 DIAG: page text: ${bodyText.replace(/\n/g, ' | ').slice(0, 250)}`);
     if (ok) {
