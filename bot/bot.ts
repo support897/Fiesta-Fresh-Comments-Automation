@@ -3545,13 +3545,13 @@ async function runPosterCycle(): Promise<void> {
             await b3.browser.close().catch(() => {});
         }
 
-        // Account 3 goes first — Account 2 waits until the URL has landed.
+        // Accounts post independently — if Account 3 fails, Account 2 still tries.
+        // (User request 2026-09-26: no cross-account blocking.)
         if (!acc3ok) {
-            console.warn(`⏭️ Poster: Account 3 did not post — Account 2 held back. Draft stays queued.`);
-            continue;
+            console.warn(`⏭️ Poster: Account 3 did not post — Account 2 proceeding independently.`);
+        } else {
+            await new Promise(r => setTimeout(r, 60000 + Math.random() * 60000));
         }
-
-        await new Promise(r => setTimeout(r, 60000 + Math.random() * 60000));
 
         // ── Step 2: Account 2 posts the EXACT draft text ──
         const b2 = await posterLaunchBrowser();
