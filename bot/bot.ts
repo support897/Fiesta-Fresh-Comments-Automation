@@ -3378,7 +3378,10 @@ async function attemptAutoRelogin(page: any, context: any, accountKey: string, s
     }
 
     const ok = await posterVerifyLogin(page, context);
-    console.log(`🔍 DIAG: post-login URL: ${page.url().slice(0, 120)}, verified: ${ok}`);
+    const pageTitle = await page.title().catch(() => '?');
+    const bodyText = await page.locator('body').innerText().catch(() => '').then(t => t.slice(0, 300));
+    console.log(`🔍 DIAG: post-login URL: ${page.url().slice(0, 120)}, title: "${pageTitle}", verified: ${ok}`);
+    console.log(`🔍 DIAG: page text: ${bodyText.replace(/\n/g, ' | ').slice(0, 250)}`);
     if (ok) {
       const cookies = await context.cookies().catch(() => []);
       await supabase.from('sessions').upsert({ user_email: sessionKey, cookies, updated_at: new Date() });
