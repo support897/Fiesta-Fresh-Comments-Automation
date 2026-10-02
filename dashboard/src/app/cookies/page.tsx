@@ -127,7 +127,7 @@ export default function CookiesPage() {
     }
   };
 
-  const verifySession = async (supabaseEmail: string): Promise<boolean> => {
+  const verifySession = async (supabaseEmail: string): Promise<{ valid: boolean; reason: string; error?: string }> => {
     try {
       const res = await fetch("/api/cookies/verify", {
         method: "POST",
@@ -135,9 +135,25 @@ export default function CookiesPage() {
         body: JSON.stringify({ email: supabaseEmail }),
       });
       const data = await res.json();
-      return data.valid === true;
+      return { valid: data.valid === true, reason: data.reason || "", error: data.error };
     } catch {
-      return false;
+      return { valid: false, reason: "request_failed" };
+    }
+  };
+
+  const reasonMessage = (reason: string, error?: string): string => {
+    if (error) return error;
+    switch (reason) {
+      case "facebook_deleted_session":
+        return "Cookies saved, but Facebook deleted this session (dead cookies). Export fresh cookies and try again.";
+      case "redirected_to_login":
+        return "Cookies saved, but Facebook bounced us to the login page (dead cookies). Export fresh cookies and try again.";
+      case "login_page_served":
+        return "Cookies saved, but Facebook served a logged-out page (dead cookies). Export fresh cookies and try again.";
+      case "inconclusive":
+        return "Cookies saved, but Facebook's reply was unclear — marked as unknown, not guessed. The posting bot will confirm on its next run.";
+      default:
+        return "Cookies saved but could not be confirmed live. Export fresh cookies and try again.";
     }
   };
 
@@ -185,12 +201,12 @@ export default function CookiesPage() {
 
       // Verify it REALLY works
       setUploadStates((prev) => ({ ...prev, [accountKey]: "verifying" }));
-      const isValid = await verifySession(supabaseEmail);
+      const check = await verifySession(supabaseEmail);
 
-      if (!isValid) {
+      if (!check.valid) {
         setUploadErrors((prev) => ({
           ...prev,
-          [accountKey]: "Cookies saved but Facebook rejected them. Export fresh cookies and try again.",
+          [accountKey]: reasonMessage(check.reason, check.error),
         }));
         setUploadStates((prev) => ({ ...prev, [accountKey]: "error" }));
         await fetchSessions();

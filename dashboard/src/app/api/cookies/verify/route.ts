@@ -25,8 +25,12 @@ export async function POST(req: NextRequest) {
     const cookieHeader = data.cookies
       .map((c: any) => `${c.name}=${c.value}`)
       .join("; ");
+    const cUser = (data.cookies as any[]).find((c: any) => c.name === "c_user")?.value as string | undefined;
 
-    // Test against Facebook — check if session is killed
+    // REAL session check: one lightweight request to Facebook, three evidence layers.
+    // Layer 1 — Facebook kills the session server-side (Set-Cookie: c_user=deleted).
+    // Layer 2 — Facebook bounces us to the login page (redirect or login HTML).
+    // Layer 3 — a logged-in homepage always embeds the viewer's user ID in the HTML.
     const res = await fetch("https://www.facebook.com/", {
       headers: {
         "Cookie": cookieHeader,
@@ -37,36 +41,49 @@ export async function POST(req: NextRequest) {
       redirect: "manual",
     });
 
-    // Check Set-Cookie headers for c_user=deleted
-    let killed = false;
-    const setCookie = res.headers.get("set-cookie");
-    if (setCookie && /c_user=deleted/i.test(setCookie)) {
-      killed = true;
-    }
-
-    // Also check via getSetCookie if available (Node 18+)
+    const setCookies: string[] = [];
+    const single = res.headers.get("set-cookie");
+    if (single) setCookies.push(single);
     try {
-      const getSetCookie = (res.headers as any).getSetCookie?.();
-      if (getSetCookie && Array.isArray(getSetCookie)) {
-        for (const sc of getSetCookie) {
-          if (/c_user=deleted/i.test(sc)) { killed = true; break; }
-        }
-      }
+      const multi = (res.headers as any).getSetCookie?.();
+      if (Array.isArray(multi)) setCookies.push(...multi);
     } catch {}
+    const killed = setCookies.some((sc) => /c_user=deleted/i.test(sc));
 
-    const valid = !killed;
+    const location = res.headers.get("location") || "";
+    const bouncedToLogin = res.status >= 300 && res.status < 400 && /\/login/i.test(location);
 
-    // Update verification status in Supabase (graceful if columns don't exist yet)
+    let body = "";
     try {
-      await supabase.from("sessions").update({
-        verified: valid,
-        verified_at: new Date().toISOString(),
-      }).eq("user_email", email);
-    } catch {
-      // Columns may not exist yet — verification result still returned
+      body = await res.text();
+    } catch {}
+    const hasUserId = !!cUser && body.includes(cUser);
+    const looksLoggedOut = /login_form|id="loginform"|name="login"/i.test(body) && !hasUserId;
+
+    // Verdict: live only on positive evidence (our user ID in Facebook's own HTML).
+    // Dead on any kill/bounce/logged-out signal. Anything else = inconclusive (never guessed).
+    let valid: boolean | null = null;
+    let reason = "";
+    if (killed) { valid = false; reason = "facebook_deleted_session"; }
+    else if (bouncedToLogin) { valid = false; reason = "redirected_to_login"; }
+    else if (hasUserId) { valid = true; reason = "user_id_in_homepage"; }
+    else if (looksLoggedOut) { valid = false; reason = "login_page_served"; }
+    else { valid = null; reason = "inconclusive"; }
+
+    // Store the real verdict (columns exist via migration 20261003_sessions_verified).
+    // Inconclusive (null) is stored as-is — the UI shows "unknown", never a guessed green/red.
+    const { error: updateError } = await supabase.from("sessions").update({
+      verified: valid,
+      verified_at: new Date().toISOString(),
+    }).eq("user_email", email);
+    if (updateError) {
+      return NextResponse.json(
+        { valid: false, error: `Check ran (${reason}) but saving the status failed: ${updateError.message}` },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ valid, killed });
+    return NextResponse.json({ valid, reason });
   } catch (e: any) {
     return NextResponse.json({ valid: false, error: e.message }, { status: 500 });
   }
