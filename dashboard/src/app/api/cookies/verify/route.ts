@@ -56,11 +56,15 @@ export async function POST(req: NextRequest) {
 
     const valid = !killed;
 
-    // Update verification status in Supabase
-    await supabase.from("sessions").update({
-      verified: valid,
-      verified_at: new Date().toISOString(),
-    }).eq("user_email", email);
+    // Update verification status in Supabase (graceful if columns don't exist yet)
+    try {
+      await supabase.from("sessions").update({
+        verified: valid,
+        verified_at: new Date().toISOString(),
+      }).eq("user_email", email);
+    } catch {
+      // Columns may not exist yet — verification result still returned
+    }
 
     return NextResponse.json({ valid, killed });
   } catch (e: any) {
