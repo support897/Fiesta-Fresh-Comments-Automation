@@ -15,9 +15,11 @@ import {
   Tags,
   Menu,
   X,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
+import { PwaProvider } from "./pwa-provider";
 import "./globals.css";
 
 const HEARTBEAT_KEY = "__heartbeat__";
@@ -73,6 +75,7 @@ const managementNav = [
   { name: "Comment Templates", href: "/templates",     icon: FileText  },
   { name: "Facebook Groups",   href: "/groups",        icon: Compass   },
   { name: "Cookie Manager",  href: "/cookies",       icon: Cookie    },
+  { name: "Notifications",   href: "/notifications", icon: Bell      },
 ];
 
 function NavSection({ title, items, pathname, onNavigate }: {
@@ -163,6 +166,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href="/icons/icon-180.png" />
       </head>
       <body className="flex overflow-hidden bg-slate-50 font-sans">
+        <PwaProvider>
         {/* Mobile top bar */}
         <header className="md:hidden fixed top-0 inset-x-0 z-30 h-14 bg-white border-b border-slate-200 flex items-center gap-3 px-4">
           <button
@@ -203,6 +207,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {children}
           </div>
         </main>
+        </PwaProvider>
       </body>
     </html>
   );
