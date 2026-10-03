@@ -152,6 +152,8 @@ export default function CookiesPage() {
         return "Cookies saved, but Facebook served a logged-out page (dead cookies). Export fresh cookies and try again.";
       case "inconclusive":
         return "Cookies saved, but Facebook's reply was unclear — marked as unknown, not guessed. The posting bot will confirm on its next run.";
+      case "request_blocked":
+        return "Cookies saved, but Facebook blocked the check request itself (not your cookies). Try Check now again in a minute.";
       default:
         return "Cookies saved but could not be confirmed live. Export fresh cookies and try again.";
     }
