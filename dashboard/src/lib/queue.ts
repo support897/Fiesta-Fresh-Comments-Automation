@@ -24,6 +24,8 @@ export type QueueRow = {
   status: string;
   created_at: string;
   posted_at: string | null;
+  comment_url?: string | null;
+  failure_reason?: string | null;
 };
 
 /** Badge styling per clean type. */

@@ -19,20 +19,36 @@ type DonePost = {
   permalink: string;
   acc2_at: string | null;
   acc3_at: string | null;
+  acc2_url: string | null;
+  acc3_url: string | null;
+};
+
+type BrokenLink = {
+  post_id: string;
+  group_url: string;
+  post_text: string;
+  service_type: string;
+  permalink: string;
+  account: string;
+  failure_reason: string | null;
+  updated_at: string;
 };
 
 export default function CommentedPage() {
   const [posts, setPosts] = useState<DonePost[]>([]);
+  const [brokenLinks, setBrokenLinks] = useState<BrokenLink[]>([]);
   const [types, setTypes] = useState<ServiceType[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: rows }, { data: trows }] = await Promise.all([
+    const [{ data: rows }, { data: trows }, { data: broken }] = await Promise.all([
       supabase.from("comment_queue").select("*").eq("status", "posted")
         .order("posted_at", { ascending: false }).limit(500),
       supabase.from("service_types").select("*").order("sort_order"),
+      supabase.from("comment_queue").select("*").eq("status", "broken_link")
+        .order("updated_at", { ascending: false }).limit(100),
     ]);
     const byPost = new Map<string, DonePost>();
     for (const r of ((rows ?? []) as QueueRow[])) {
@@ -43,13 +59,16 @@ export default function CommentedPage() {
           service_type: r.service_type, permalink: r.permalink,
           acc2_at: r.account === "acc2" ? r.posted_at : null,
           acc3_at: r.account === "acc3" ? r.posted_at : null,
+          acc2_url: r.account === "acc2" ? (r.comment_url ?? null) : null,
+          acc3_url: r.account === "acc3" ? (r.comment_url ?? null) : null,
         });
       } else {
-        if (r.account === "acc2") cur.acc2_at = r.posted_at;
-        if (r.account === "acc3") cur.acc3_at = r.posted_at;
+        if (r.account === "acc2") { cur.acc2_at = r.posted_at; cur.acc2_url = r.comment_url ?? null; }
+        if (r.account === "acc3") { cur.acc3_at = r.posted_at; cur.acc3_url = r.comment_url ?? null; }
       }
     }
     setPosts([...byPost.values()]);
+    setBrokenLinks((broken ?? []) as BrokenLink[]);
     setTypes((trows ?? []) as ServiceType[]);
     setLoading(false);
   }, []);
@@ -154,17 +173,37 @@ export default function CommentedPage() {
                   </div>
                   <p className="text-sm text-slate-700 leading-relaxed line-clamp-2">{p.post_text}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-slate-400 font-medium flex-wrap">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 rounded-full">
-                      <CheckCheck size={12} className="text-blue-600" />
-                      <span className="font-bold text-blue-700">Ilse Placencia</span>
-                      <span className="text-blue-500">commented {agoLabel(p.acc2_at)}</span>
-                    </span>
-                    {p.acc3_at ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 rounded-full">
-                        <CheckCheck size={12} className="text-emerald-600" />
-                        <span className="font-bold text-emerald-700">Website Booster</span>
-                        <span className="text-emerald-600">linked {agoLabel(p.acc3_at)}</span>
+                    {p.acc2_url ? (
+                      <a href={p.acc2_url} target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 hover:bg-blue-100 rounded-full transition-all">
+                        <CheckCheck size={12} className="text-blue-600" />
+                        <span className="font-bold text-blue-700">Ilse Placencia</span>
+                        <span className="text-blue-500">commented {agoLabel(p.acc2_at)}</span>
+                        <ExternalLink size={10} className="text-blue-400" />
+                      </a>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 rounded-full">
+                        <CheckCheck size={12} className="text-blue-600" />
+                        <span className="font-bold text-blue-700">Ilse Placencia</span>
+                        <span className="text-blue-500">commented {agoLabel(p.acc2_at)}</span>
                       </span>
+                    )}
+                    {p.acc3_at ? (
+                      p.acc3_url ? (
+                        <a href={p.acc3_url} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-all">
+                          <CheckCheck size={12} className="text-emerald-600" />
+                          <span className="font-bold text-emerald-700">Website Booster</span>
+                          <span className="text-emerald-600">linked {agoLabel(p.acc3_at)}</span>
+                          <ExternalLink size={10} className="text-emerald-400" />
+                        </a>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 rounded-full">
+                          <CheckCheck size={12} className="text-emerald-600" />
+                          <span className="font-bold text-emerald-700">Website Booster</span>
+                          <span className="text-emerald-600">linked {agoLabel(p.acc3_at)}</span>
+                        </span>
+                      )
                     ) : (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 rounded-full text-amber-600 font-bold">Website Booster pending</span>
                     )}
@@ -177,6 +216,37 @@ export default function CommentedPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Broken links — kept for record */}
+      {brokenLinks.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-lg font-black text-slate-900 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-red-500" />
+            Broken links ({brokenLinks.length})
+          </h2>
+          <p className="text-xs text-slate-500 mb-3">Posts that were removed or unavailable when the bot tried to comment. Kept for record.</p>
+          <div className="grid grid-cols-1 gap-3">
+            {brokenLinks.map((b) => (
+              <div key={`${b.post_id}-${b.account}`} className="bg-red-50 border border-red-200 rounded-3xl p-4 shadow-sm">
+                <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">
+                    🔗 Broken link
+                  </span>
+                  <span className="text-xs font-bold text-slate-600">
+                    {b.account === "acc2" ? "Ilse Placencia" : "Website Booster"}
+                  </span>
+                  <span className="text-xs text-slate-400">{groupNameFromUrl(b.group_url)}</span>
+                  <span className="text-xs text-slate-400 ml-auto">{agoLabel(b.updated_at)}</span>
+                </div>
+                <p className="text-sm text-slate-600 leading-relaxed line-clamp-2">{b.post_text}</p>
+                {b.failure_reason && (
+                  <p className="text-[11px] text-red-600 mt-1 font-medium">Reason: {b.failure_reason}</p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

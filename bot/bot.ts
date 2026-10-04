@@ -3436,10 +3436,24 @@ async function ensurePosterSession(page: any, context: any, accountKey: string, 
 }
 
 /** Type the EXACT text and post it on the given post URL. Verifies it landed. */
-async function posterPostExact(page: any, postUrl: string, text: string, label: string): Promise<{ ok: boolean; commentUrl: string }> {
+async function posterPostExact(page: any, postUrl: string, text: string, label: string): Promise<{ ok: boolean; commentUrl: string; broken?: boolean }> {
     await page.goto(postUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
     await new Promise(r => setTimeout(r, 3000));
     await closeOverlays(page).catch(() => {});
+
+    // Check for broken link: post not found, removed, or error page
+    const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 2000) || '').catch(() => '');
+    const lowerText = pageText.toLowerCase();
+    const brokenIndicators = [
+        'this content isn\'t available', 'content not found', 'page not found',
+        'post couldn\'t be found', 'link you followed may be broken',
+        'this page isn\'t available', 'sorry, this content isn\'t available',
+    ];
+    if (brokenIndicators.some(ind => lowerText.includes(ind))) {
+        console.warn(`🔗 Poster [${label}]: BROKEN LINK detected — post not found or removed.`);
+        return { ok: false, commentUrl: '', broken: true };
+    }
+
     const placeholder = page.locator(
         '[aria-label*="Write a public comment" i], [aria-label*="Write a comment" i], ' +
         '[aria-label*="Leave a comment" i], [aria-placeholder*="comment" i], ' +
@@ -3468,21 +3482,30 @@ async function posterPostExact(page: any, postUrl: string, text: string, label: 
     return { ok: !!proof.verified, commentUrl: proof.url || '' };
 }
 
-async function posterMarkAcc3(draft: any) {
+async function posterMarkBroken(draft: any, account: string, reason: string) {
+    const now = new Date().toISOString();
+    const { error } = await supabase.from('comment_queue')
+        .update({ status: 'broken_link', failure_reason: reason, updated_at: now })
+        .eq('post_id', draft.post_id).eq('account', account);
+    if (error) console.warn('⚠️ Poster: broken link mark failed:', error.message);
+}
+
+async function posterMarkAcc3(draft: any, commentUrl?: string) {
     const now = new Date().toISOString();
     const { error } = await supabase.from('comment_queue').upsert({
         post_id: draft.post_id, account: 'acc3', group_url: draft.group_url,
         post_text: draft.post_text, service_type: draft.service_type,
         comment_text: POSTER_URL_TEXT, permalink: draft.permalink,
         status: 'posted', posted_at: now, updated_at: now,
+        comment_url: commentUrl || null,
     }, { onConflict: 'post_id,account' });
     if (error) console.warn('⚠️ Poster: acc3 queue upsert failed:', error.message);
 }
 
-async function posterMarkAcc2(draft: any) {
+async function posterMarkAcc2(draft: any, commentUrl?: string) {
     const now = new Date().toISOString();
     const { error } = await supabase.from('comment_queue')
-        .update({ status: 'posted', posted_at: now, updated_at: now })
+        .update({ status: 'posted', posted_at: now, updated_at: now, comment_url: commentUrl || null })
         .eq('post_id', draft.post_id).eq('account', 'acc2');
     if (error) console.warn('⚠️ Poster: acc2 queue update failed:', error.message);
 }
@@ -3561,8 +3584,11 @@ async function runPosterCycle(): Promise<void> {
                     console.warn('⚠️ Poster: Account 3 session unavailable. Draft stays queued.');
                 } else {
                     const res = await posterPostExact(page, draft.permalink, POSTER_URL_TEXT, 'acc3');
-                    if (res.ok) {
-                        await posterMarkAcc3(draft);
+                    if (res.broken) {
+                        await posterMarkBroken(draft, 'acc3', 'broken_link');
+                        console.warn(`🔗 Poster: Account 3 — broken link on ${draft.post_id}, marked for record.`);
+                    } else if (res.ok) {
+                        await posterMarkAcc3(draft, res.commentUrl);
                         await posterLogReply(draft.post_id, draft.permalink, res.commentUrl, 'account3');
                         console.log(`✅ Poster: Account 3 URL posted on ${draft.post_id}.`);
                     } else {
@@ -3593,8 +3619,11 @@ async function runPosterCycle(): Promise<void> {
                     console.warn(`⚠️ Poster: ${acc2Email} session unavailable. Draft stays queued.`);
                 } else {
                     const res = await posterPostExact(page, draft.permalink, draft.comment_text, 'acc2');
-                    if (res.ok) {
-                        await posterMarkAcc2(draft);
+                    if (res.broken) {
+                        await posterMarkBroken(draft, 'acc2', 'broken_link');
+                        console.warn(`🔗 Poster: ${acc2Email} — broken link on ${draft.post_id}, marked for record.`);
+                    } else if (res.ok) {
+                        await posterMarkAcc2(draft, res.commentUrl);
                         await posterLogReply(draft.post_id, draft.group_url, res.commentUrl, acc2Email);
                         console.log(`✅ Poster: ${acc2Email} comment posted on ${draft.post_id}.`);
                     } else {
