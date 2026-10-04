@@ -3246,10 +3246,12 @@ function posterQuietHours(): boolean {
 }
 
 async function posterFetchDrafts(): Promise<any[]> {
+    // Fetch drafts for BOTH accounts independently.
+    // Each account posts its own drafts on its own schedule — no dependencies.
     const { data, error } = await supabase
         .from('comment_queue')
         .select('*')
-        .eq('account', 'acc2')
+        .in('account', ['acc2', 'acc3'])
         .eq('status', 'draft_ready')
         .order('created_at', { ascending: true })
         .limit(POSTER_DRAFTS_PER_CYCLE);
@@ -3495,7 +3497,7 @@ async function posterLogReply(postId: string, groupUrl: string, commentUrl: stri
 }
 
 async function runPosterCycle(): Promise<void> {
-    console.log('📮 Poster cycle: checking comment_queue for drafts_ready acc2 drafts...');
+    console.log('📮 Poster cycle: checking comment_queue for draft_ready drafts (both accounts)...');
     // Honor the global pause switch (config.bot_status=false) — same as legacy runBot().
     try {
         const { data: config } = await supabase.from('config').select('bot_status').maybeSingle();
@@ -3534,76 +3536,77 @@ async function runPosterCycle(): Promise<void> {
         if (ageH > POSTER_MAX_DRAFT_AGE_HOURS) {
             await supabase.from('comment_queue')
                 .update({ status: 'skipped', updated_at: new Date().toISOString() })
-                .eq('post_id', draft.post_id).eq('account', 'acc2');
-            console.log(`⏭️ Poster: draft ${draft.post_id} is ${ageH.toFixed(0)}h old — marked skipped.`);
+                .eq('post_id', draft.post_id).eq('account', draft.account);
+            console.log(`⏭️ Poster: draft ${draft.post_id} (${draft.account}) is ${ageH.toFixed(0)}h old — marked skipped.`);
             continue;
         }
 
-        // Per-account throttles (daily caps + minimum gaps, counted from replies_log)
-        if (!(await accountMayComment('account3', 'account3'))) { console.log('⏸️ Poster: Account 3 throttled — retry next cycle.'); continue; }
-        if (!(await accountMayComment(acc2Email))) { console.log(`⏸️ Poster: ${acc2Email} throttled — retry next cycle.`); continue; }
+        // Each draft is fully independent — process based on its account.
+        // No cross-account dependencies: if one account fails, the other still tries its own drafts.
+        if (draft.account === 'acc3') {
+            // ── Account 3 posts the website URL ──
+            if (!(await accountMayComment('account3', 'account3'))) { console.log('⏸️ Poster: Account 3 throttled — retry next cycle.'); continue; }
 
-        console.log(`\n📮 Poster: draft ${draft.post_id} (${draft.service_type}) — Account 3 URL FIRST.`);
+            console.log(`\n📮 Poster: draft ${draft.post_id} (${draft.service_type}) — Account 3 URL.`);
 
-        if (DRY_RUN) {
-            console.log(`[DRY RUN] Would post URL as Account 3, then draft as ${acc2Email}, on ${draft.permalink}`);
-            continue;
-        }
-
-        // ── Step 1: Account 3 posts the website URL ──
-        let acc3ok = false;
-        const b3 = await posterLaunchBrowser();
-        try {
-            const page = b3.context.pages().length > 0 ? b3.context.pages()[0] : await b3.context.newPage();
-            if (!(await ensurePosterSession(page, b3.context, 'account3', 'account3', path.join(__dirname, 'account3_cookies.json')))) {
-                console.warn('⚠️ Poster: Account 3 session unavailable (auto-relogin failed or not configured). Draft stays queued.');
-            } else {
-                const res = await posterPostExact(page, draft.permalink, POSTER_URL_TEXT, 'acc3');
-                if (res.ok) {
-                    acc3ok = true;
-                    await posterMarkAcc3(draft);
-                    await posterLogReply(draft.post_id, draft.permalink, res.commentUrl, 'account3');
-                    console.log(`✅ Poster: Account 3 URL posted on ${draft.post_id}.`);
-                } else {
-                    console.warn(`⚠️ Poster: Account 3 URL NOT confirmed on ${draft.post_id} — leaving queued.`);
-                }
+            if (DRY_RUN) {
+                console.log(`[DRY RUN] Would post URL as Account 3 on ${draft.permalink}`);
+                continue;
             }
-        } catch (e: any) {
-            console.error('⚠️ Poster Account 3 error:', e.message);
-        } finally {
-            await b3.context.close().catch(() => {});
-            await b3.browser.close().catch(() => {});
-        }
 
-        // Accounts post independently — if Account 3 fails, Account 2 still tries.
-        // (User request 2026-09-26: no cross-account blocking.)
-        if (!acc3ok) {
-            console.warn(`⏭️ Poster: Account 3 did not post — Account 2 proceeding independently.`);
+            const b3 = await posterLaunchBrowser();
+            try {
+                const page = b3.context.pages().length > 0 ? b3.context.pages()[0] : await b3.context.newPage();
+                if (!(await ensurePosterSession(page, b3.context, 'account3', 'account3', path.join(__dirname, 'account3_cookies.json')))) {
+                    console.warn('⚠️ Poster: Account 3 session unavailable. Draft stays queued.');
+                } else {
+                    const res = await posterPostExact(page, draft.permalink, POSTER_URL_TEXT, 'acc3');
+                    if (res.ok) {
+                        await posterMarkAcc3(draft);
+                        await posterLogReply(draft.post_id, draft.permalink, res.commentUrl, 'account3');
+                        console.log(`✅ Poster: Account 3 URL posted on ${draft.post_id}.`);
+                    } else {
+                        console.warn(`⚠️ Poster: Account 3 URL NOT confirmed on ${draft.post_id} — leaving queued.`);
+                    }
+                }
+            } catch (e: any) {
+                console.error('⚠️ Poster Account 3 error:', e.message);
+            } finally {
+                await b3.context.close().catch(() => {});
+                await b3.browser.close().catch(() => {});
+            }
         } else {
-            await new Promise(r => setTimeout(r, 60000 + Math.random() * 60000));
-        }
+            // ── Account 2 (main_reply) posts the comment ──
+            if (!(await accountMayComment(acc2Email))) { console.log(`⏸️ Poster: ${acc2Email} throttled — retry next cycle.`); continue; }
 
-        // ── Step 2: Account 2 posts the EXACT draft text ──
-        const b2 = await posterLaunchBrowser();
-        try {
-            const page = b2.context.pages().length > 0 ? b2.context.pages()[0] : await b2.context.newPage();
-            if (!(await ensurePosterSession(page, b2.context, 'account2', acc2Email))) {
-                console.warn(`⚠️ Poster: ${acc2Email} session unavailable (auto-relogin failed or not configured). Draft stays queued.`);
-            } else {
-                const res = await posterPostExact(page, draft.permalink, draft.comment_text, 'acc2');
-                if (res.ok) {
-                    await posterMarkAcc2(draft);
-                    await posterLogReply(draft.post_id, draft.group_url, res.commentUrl, acc2Email);
-                    console.log(`✅ Poster: Account 2 comment posted on ${draft.post_id}.`);
-                } else {
-                    console.warn(`⚠️ Poster: Account 2 comment NOT confirmed on ${draft.post_id} — draft stays queued.`);
-                }
+            console.log(`\n📮 Poster: draft ${draft.post_id} (${draft.service_type}) — ${acc2Email} comment.`);
+
+            if (DRY_RUN) {
+                console.log(`[DRY RUN] Would post comment as ${acc2Email} on ${draft.permalink}`);
+                continue;
             }
-        } catch (e: any) {
-            console.error('⚠️ Poster Account 2 error:', e.message);
-        } finally {
-            await b2.context.close().catch(() => {});
-            await b2.browser.close().catch(() => {});
+
+            const b2 = await posterLaunchBrowser();
+            try {
+                const page = b2.context.pages().length > 0 ? b2.context.pages()[0] : await b2.context.newPage();
+                if (!(await ensurePosterSession(page, b2.context, 'account2', acc2Email))) {
+                    console.warn(`⚠️ Poster: ${acc2Email} session unavailable. Draft stays queued.`);
+                } else {
+                    const res = await posterPostExact(page, draft.permalink, draft.comment_text, 'acc2');
+                    if (res.ok) {
+                        await posterMarkAcc2(draft);
+                        await posterLogReply(draft.post_id, draft.group_url, res.commentUrl, acc2Email);
+                        console.log(`✅ Poster: ${acc2Email} comment posted on ${draft.post_id}.`);
+                    } else {
+                        console.warn(`⚠️ Poster: ${acc2Email} comment NOT confirmed on ${draft.post_id} — draft stays queued.`);
+                    }
+                }
+            } catch (e: any) {
+                console.error(`⚠️ Poster ${acc2Email} error:`, e.message);
+            } finally {
+                await b2.context.close().catch(() => {});
+                await b2.browser.close().catch(() => {});
+            }
         }
 
         const gapMin = parseInt(process.env.COMMENT_DELAY_MIN_SECONDS || '45');

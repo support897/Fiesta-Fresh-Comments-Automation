@@ -218,23 +218,38 @@ def main():
             stats['approved'] += 1
             comment = templates.get(svc_key) or templates['general']
             permalink = f'https://www.facebook.com/groups/{gid}/posts/{pid}/'
-            row = {
-                'post_id': pid,
-                'account': 'acc2',
-                'group_url': gurl,
-                'post_text': text[:4000],
-                'service_type': svc_key,
-                'comment_text': comment,
-                'permalink': permalink,
-                'status': 'draft_ready',
-            }
+            # Both accounts get independent drafts for every post.
+            # Neither depends on the other — each posts on its own schedule.
+            rows = [
+                {
+                    'post_id': pid,
+                    'account': 'acc2',
+                    'group_url': gurl,
+                    'post_text': text[:4000],
+                    'service_type': svc_key,
+                    'comment_text': comment,
+                    'permalink': permalink,
+                    'status': 'draft_ready',
+                },
+                {
+                    'post_id': pid,
+                    'account': 'acc3',
+                    'group_url': gurl,
+                    'post_text': text[:4000],
+                    'service_type': svc_key,
+                    'comment_text': 'https://www.fiestafreshcleaning.com/',
+                    'permalink': permalink,
+                    'status': 'draft_ready',
+                },
+            ]
             if dry_run:
-                log(f'  DRY-RUN [{svc_key}] {permalink} — {reason}')
+                log(f'  DRY-RUN [{svc_key}] {permalink} — {reason} (2 drafts: acc2 + acc3)')
             else:
-                inserted = sb_insert('comment_queue', row)
-                if inserted is not None:
-                    stats['drafts'] += 1
-                    log(f'  ✏️ draft [{svc_key}] {permalink}')
+                for row in rows:
+                    inserted = sb_insert('comment_queue', row)
+                    if inserted is not None:
+                        stats['drafts'] += 1
+                log(f'  ✏️ drafts [{svc_key}] {permalink} (acc2 + acc3)')
             seen.add(pid)
 
     log(f"Done: {stats['groups']} groups, {stats['posts']} posts scanned, "
