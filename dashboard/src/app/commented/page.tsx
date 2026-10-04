@@ -154,15 +154,19 @@ export default function CommentedPage() {
                   </div>
                   <p className="text-sm text-slate-700 leading-relaxed line-clamp-2">{p.post_text}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-slate-400 font-medium flex-wrap">
-                    <span className="inline-flex items-center gap-1">
-                      <CheckCheck size={12} className="text-blue-500" /> Acc2 {agoLabel(p.acc2_at)}
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 rounded-full">
+                      <CheckCheck size={12} className="text-blue-600" />
+                      <span className="font-bold text-blue-700">Ilse Placencia</span>
+                      <span className="text-blue-500">commented {agoLabel(p.acc2_at)}</span>
                     </span>
                     {p.acc3_at ? (
-                      <span className="inline-flex items-center gap-1">
-                        <CheckCheck size={12} className="text-emerald-500" /> Acc3 {agoLabel(p.acc3_at)}
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 rounded-full">
+                        <CheckCheck size={12} className="text-emerald-600" />
+                        <span className="font-bold text-emerald-700">Website Booster</span>
+                        <span className="text-emerald-600">linked {agoLabel(p.acc3_at)}</span>
                       </span>
                     ) : (
-                      <span className="text-amber-500 font-bold">Acc3 pending</span>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 rounded-full text-amber-600 font-bold">Website Booster pending</span>
                     )}
                   </div>
                 </div>
