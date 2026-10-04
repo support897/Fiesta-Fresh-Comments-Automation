@@ -3264,8 +3264,11 @@ async function posterFetchDrafts(): Promise<any[]> {
 
 async function posterLaunchBrowser() {
     const proxy = resolveProxy();
+    // Use explicit executable path to avoid Playwright version mismatch issues
+    const execPath = '/home/ubuntu/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome';
     const browser = await chromium.launch({
         headless: process.env.HEADLESS !== 'false',
+        executablePath: execPath,
         args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
         ...(proxy ? { proxy } : {}),
     });
