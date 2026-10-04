@@ -273,6 +273,36 @@ const ACCOUNTS = BOT_ACCOUNT
     : ALL_ACCOUNTS;
 let currentAccountIndex = 0;
 let consecutiveAuthFailures = 0;
+// Circuit breaker: timestamps of recent auth failures. After 3 failures
+// within 2 hours, the bot stops attempting logins entirely to avoid
+// spamming Facebook and getting accounts flagged. A human must provide
+// fresh cookies to reset it.
+let authFailureTimestamps: number[] = [];
+const CIRCUIT_BREAKER_MAX_FAILURES = 3;
+const CIRCUIT_BREAKER_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+function isCircuitBreakerTripped(): boolean {
+    const now = Date.now();
+    // Keep only failures within the window
+    authFailureTimestamps = authFailureTimestamps.filter(
+        t => now - t < CIRCUIT_BREAKER_WINDOW_MS
+    );
+    return authFailureTimestamps.length >= CIRCUIT_BREAKER_MAX_FAILURES;
+}
+
+function recordAuthFailure(): void {
+    authFailureTimestamps.push(Date.now());
+    // Trim to window
+    const now = Date.now();
+    authFailureTimestamps = authFailureTimestamps.filter(
+        t => now - t < CIRCUIT_BREAKER_WINDOW_MS
+    );
+}
+
+function resetCircuitBreaker(): void {
+    authFailureTimestamps = [];
+    consecutiveAuthFailures = 0;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-ACCOUNT TEMPLATES + POSTING RULES
@@ -3089,6 +3119,12 @@ async function main() {
                 console.error("❌ No Facebook accounts configured.");
                 return;
             }
+            // Circuit breaker: if we've failed 3+ logins in 2h, stop trying.
+            // Hammering Facebook with dead cookies gets accounts flagged.
+            if (isCircuitBreakerTripped()) {
+                console.error("🚨 Circuit breaker active — skipping all login attempts. Waiting for fresh cookies.");
+                return;
+            }
             // Try accounts in sequence until one succeeds to log in
             let success = false;
             for (let i = 0; i < ACCOUNTS.length; i++) {
@@ -3114,8 +3150,12 @@ async function main() {
             if (!success) {
                 console.error("❌ All configured Facebook accounts failed to authenticate in this cycle.");
                 consecutiveAuthFailures++;
+                recordAuthFailure();
+                if (isCircuitBreakerTripped()) {
+                    console.error("🚨 CIRCUIT BREAKER TRIPPED: 3 auth failures in 2 hours. Stopping all login attempts to protect accounts. A human must provide fresh cookies.");
+                }
             } else {
-                consecutiveAuthFailures = 0;
+                resetCircuitBreaker();
             }
         } catch (err) {
             console.error("Bot cycle failed:", err);
