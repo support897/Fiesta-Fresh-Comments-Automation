@@ -964,14 +964,6 @@ async function gotoWithRetry(page: any, url: string, label: string, tries: numbe
     return false;
 }
 
-async function humanType(page: any, selector: string, text: string) {
-    await page.click(selector, { force: true }).catch(() => {});
-    // Per-character typing with jitter — instant insertText is a strong bot tell.
-    for (const ch of text) {
-        await page.keyboard.type(ch, { delay: 40 + Math.floor(Math.random() * 110) });
-    }
-}
-
 /** Types the reply body with human-ish cadence, chunked so long templates stay quick enough. */
 async function typeComment(page: any, text: string) {
     const chunks = text.split(/(\n\n)/);
@@ -1638,7 +1630,6 @@ async function writeHeartbeat(extra: Record<string, any> = {}) {
 let newLeadsThisCycle = 0;
 /** Feed-first discovery; set FEED_MODE=0 to fall back to per-group sweeping. */
 const FEED_MODE = process.env.FEED_MODE !== '0';
-let lastSweepDate = '';
 // The full per-group patrol (Phase 2B) was firing on EVERY cycle regardless of
 // how recently it last ran — with GROUPS_PER_CYCLE=104 that turned a single
 // cycle into a 20-40 minute slog, starving the fast feed/search/notification
@@ -3152,7 +3143,6 @@ async function main() {
     // Now: sweep every group, then sleep for a fixed rest period, then repeat.
     // Between 23:00 and 05:00 Brisbane the bot stays asleep entirely.
     // ─────────────────────────────────────────────────────────────────────────
-    const REST_MS = parseInt(process.env.SLEEP_BETWEEN_CYCLES_SECONDS || '3600') * 1000;
     const QUIET_START = parseInt(process.env.QUIET_HOURS_START || '23');
     const QUIET_END = parseInt(process.env.QUIET_HOURS_END || '5');
     const bneHour = () => parseInt(new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', timeZone: 'Australia/Brisbane' }), 10);
