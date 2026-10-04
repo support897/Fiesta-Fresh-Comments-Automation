@@ -40,8 +40,8 @@ type AccountHealth = {
 };
 
 const ACCOUNTS = [
-  { key: "projects.reports.ilse@gmail.com", label: "Projects Reports", initial: "P" },
-  { key: "account3",                        label: "Website Booster",  initial: "W" },
+  { key: "ilse2taylor@gmail.com", label: "Ilse Placencia", initial: "I", dbAccount: "acc2" },
+  { key: "account3",               label: "Website Booster", initial: "W", dbAccount: "acc3" },
 ];
 
 function brisbaneTodayStart(): Date {
@@ -60,6 +60,8 @@ export default function DashboardPage() {
   const [accounts, setAccounts] = useState<AccountHealth[]>([]);
   const [draftsWaiting, setDraftsWaiting] = useState<QueueRow[]>([]);
   const [postedToday, setPostedToday] = useState(0);
+  const [postedTodayRows, setPostedTodayRows] = useState<QueueRow[]>([]);
+  const [allTimeByAccount, setAllTimeByAccount] = useState<{ acc2: number; acc3: number }>({ acc2: 0, acc3: 0 });
   const [staleSoon, setStaleSoon] = useState<QueueRow[]>([]);
   const [trend, setTrend] = useState<{ day: string; drafts: number; posted: number }[]>([]);
   const [alerts, setAlerts] = useState<{ id: string; message: string; created_at: string }[]>([]);
@@ -95,7 +97,21 @@ export default function DashboardPage() {
       const todayStart = brisbaneTodayStart().toISOString();
       const waiting = all.filter((r) => r.status === "draft_ready" && r.account === "acc2");
       setDraftsWaiting(waiting);
-      setPostedToday(all.filter((r) => r.status === "posted" && (r.posted_at ?? "") >= todayStart).length);
+      const todayRows = all.filter((r) => r.status === "posted" && (r.posted_at ?? "") >= todayStart);
+      setPostedToday(todayRows.length);
+      setPostedTodayRows(todayRows.sort((a, b) => (b.posted_at ?? "").localeCompare(a.posted_at ?? "")));
+
+      // All-time posted per account (real data, no placeholders)
+      const { data: allPosted } = await supabase
+        .from("comment_queue")
+        .select("account")
+        .eq("status", "posted");
+      const counts = { acc2: 0, acc3: 0 };
+      for (const r of (allPosted ?? []) as { account: string }[]) {
+        if (r.account === "acc2") counts.acc2++;
+        else if (r.account === "acc3") counts.acc3++;
+      }
+      setAllTimeByAccount(counts);
 
       const staleCutoff = new Date(Date.now() - STALE_WARNING_HOURS * 3600 * 1000).toISOString();
       setStaleSoon(
@@ -307,6 +323,70 @@ export default function DashboardPage() {
           </div>
           <div className="text-[11px] text-slate-400 mt-0.5">Facebook logins</div>
         </div>
+      </div>
+
+      {/* ── COMMENTED: all-time per account + today ── */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+        <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <CheckCheck size={14} className="text-emerald-500" />
+          Commented
+          <Link href="/commented" className="ml-auto text-[11px] font-bold text-blue-600 flex items-center gap-0.5">
+            Full history <ChevronRight size={12} />
+          </Link>
+        </h2>
+
+        {/* All-time per account */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
+            <div className="text-2xl font-black text-blue-700">{allTimeByAccount.acc2}</div>
+            <div className="text-[11px] font-bold text-blue-600">Ilse Placencia</div>
+            <div className="text-[10px] text-blue-400">all-time comments</div>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+            <div className="text-2xl font-black text-emerald-700">{allTimeByAccount.acc3}</div>
+            <div className="text-[11px] font-bold text-emerald-600">Website Booster</div>
+            <div className="text-[10px] text-emerald-400">all-time links</div>
+          </div>
+        </div>
+
+        {/* Today */}
+        <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+          Today ({postedTodayRows.length})
+        </div>
+        {postedTodayRows.length === 0 ? (
+          <p className="text-xs text-slate-400 py-2">Nothing posted today yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {postedTodayRows.slice(0, 5).map((r) => (
+              <div key={r.id} className="flex items-center gap-2.5 p-2.5 bg-slate-50 rounded-xl">
+                <span className={cn(
+                  "w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0",
+                  r.account === "acc2" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"
+                )}>
+                  {r.account === "acc2" ? "I" : "W"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-slate-700 truncate">
+                    {r.account === "acc2" ? "Ilse Placencia" : "Website Booster"}
+                    <span className="font-normal text-slate-400"> · {agoLabel(r.posted_at)}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-500 truncate">{r.post_text?.slice(0, 60)}…</p>
+                </div>
+                {r.permalink && (
+                  <a href={r.permalink} target="_blank" rel="noopener noreferrer"
+                    className="text-blue-600 shrink-0">
+                    <ChevronRight size={14} />
+                  </a>
+                )}
+              </div>
+            ))}
+            {postedTodayRows.length > 5 && (
+              <Link href="/commented" className="block text-center text-[11px] font-bold text-blue-600 py-1">
+                + {postedTodayRows.length - 5} more today
+              </Link>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── 3. NEEDS ATTENTION ── */}
