@@ -68,6 +68,10 @@ export async function POST(req: NextRequest) {
     } catch {}
     const hasUserId = !!cUser && body.includes(cUser);
     const looksLoggedOut = /login_form|id="loginform"|name="login"/i.test(body) && !hasUserId;
+    // Account lock / checkpoint: Facebook shows the lock screen WITH the user ID
+    // embedded, so hasUserId alone gives a false "live". Detect it explicitly.
+    const isLocked = /confirm this is your account to unlock|we locked your account|account.*may have been hacked/i.test(body);
+    const isCheckpoint = /checkpoint/i.test(location) || /checkpoint/i.test(body.slice(0, 2000));
 
     // Verdict: live only on positive evidence (our user ID in Facebook's own HTML).
     // Dead on any kill/bounce/logged-out signal. Anything else = inconclusive (never guessed).
@@ -76,6 +80,8 @@ export async function POST(req: NextRequest) {
     const isErrorPage = res.status === 400 && /<title>Error<\/title>/i.test(body);
     if (killed) { valid = false; reason = "facebook_deleted_session"; }
     else if (bouncedToLogin) { valid = false; reason = "redirected_to_login"; }
+    else if (isLocked) { valid = false; reason = "account_locked"; }
+    else if (isCheckpoint) { valid = false; reason = "checkpoint_required"; }
     else if (hasUserId) { valid = true; reason = "user_id_in_homepage"; }
     else if (looksLoggedOut) { valid = false; reason = "login_page_served"; }
     else if (isErrorPage) { valid = null; reason = "request_blocked"; }

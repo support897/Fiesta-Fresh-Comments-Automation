@@ -3264,12 +3264,15 @@ async function posterFetchDrafts(): Promise<any[]> {
 
 async function posterLaunchBrowser() {
     const proxy = resolveProxy();
-    // Use explicit executable path to avoid Playwright version mismatch issues
-    const execPath = '/home/ubuntu/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome';
+    // Use explicit executable path to avoid Playwright version mismatch issues.
+    // PLAYWRIGHT_EXEC_PATH overrides it for non-VPS runs (e.g. local recovery).
+    const execPath = process.env.PLAYWRIGHT_EXEC_PATH || '/home/ubuntu/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome';
     const browser = await chromium.launch({
         headless: process.env.HEADLESS !== 'false',
         executablePath: execPath,
-        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+        args: ['--disable-blink-features=AutomationControlled', '--no-sandbox',
+            // Needed when driving through a TLS-intercepting local proxy (agent VM).
+            ...(process.env.IGNORE_CERT_ERRORS === 'true' ? ['--ignore-certificate-errors'] : [])],
         ...(proxy ? { proxy } : {}),
     });
     const context = await browser.newContext({
@@ -3440,8 +3443,14 @@ async function ensurePosterSession(page: any, context: any, accountKey: string, 
 
 /** Type the EXACT text and post it on the given post URL. Verifies it landed. */
 async function posterPostExact(page: any, postUrl: string, text: string, label: string): Promise<{ ok: boolean; commentUrl: string; broken?: boolean }> {
-    await page.goto(postUrl, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS }).catch(() => {});
-    await new Promise(r => setTimeout(r, 3000));
+    // Retry the navigation — on a flaky/slow link a single timed-out goto
+    // leaves us on the wrong page, where no comment box can ever be found.
+    const navOk = await gotoWithRetry(page, postUrl, `post ${label}`, 3);
+    if (!navOk) {
+        console.warn(`⚠️ Poster [${label}]: post page did not load — leaving queued for retry.`);
+        return { ok: false, commentUrl: '' };
+    }
+    await new Promise(r => setTimeout(r, 5000));
     await closeOverlays(page).catch(() => {});
 
     // Check for broken link: post not found, removed, or error page
@@ -3475,6 +3484,14 @@ async function posterPostExact(page: any, postUrl: string, text: string, label: 
         }
     }
     if (!ready) {
+        // If the post content itself never rendered (endless skeleton / empty
+        // body), the post is gone or invisible to this account — retrying is
+        // pointless. Mark it broken so it stops burning cycles.
+        const bodyLen = await page.evaluate(() => document.body?.innerText?.length || 0).catch(() => 0);
+        if (bodyLen < 300) {
+            console.warn(`⚠️ Poster [${label}]: post content never rendered (body ${bodyLen} chars) — treating as broken link.`);
+            return { ok: false, commentUrl: '', broken: true };
+        }
         console.warn(`⚠️ Poster [${label}]: comment box not found.`);
         return { ok: false, commentUrl: '' };
     }
@@ -3487,8 +3504,12 @@ async function posterPostExact(page: any, postUrl: string, text: string, label: 
 
 async function posterMarkBroken(draft: any, account: string, reason: string) {
     const now = new Date().toISOString();
+    // NOTE: 'broken_link' is the intended status (see dashboard commented page),
+    // but the DB CHECK constraint only allows draft_ready/posted/skipped until
+    // migration 20261005_fix_status_check is applied. Use 'skipped' + reason so
+    // deleted posts stop retrying and stay recorded either way.
     const { error } = await supabase.from('comment_queue')
-        .update({ status: 'broken_link', failure_reason: reason, updated_at: now })
+        .update({ status: 'skipped', failure_reason: reason, updated_at: now })
         .eq('post_id', draft.post_id).eq('account', account);
     if (error) console.warn('⚠️ Poster: broken link mark failed:', error.message);
 }
